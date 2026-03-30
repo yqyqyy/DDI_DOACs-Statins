@@ -1,0 +1,32 @@
+/*=========================================================================
+DO FILE NAME:			5_doac_interact_statin_call_model_univariable
+
+Aim:
+
+Call the program: 5_doac_interact_statin_model_univariable
+
+To run unadjusted model only
+
+*=============================================================================*/
+
+
+*Comparing concomitant groups 
+foreach drug in expostatin_otherstatin simvastatin_otherstatin atorvastatin_otherstatin expostatin_doaconly {
+foreach outcome in h_stroke h_vte h_mi h_cvd cvd_death all_death h_major_bleed h_intracranial_bleed h_gi_bleed {
+
+global outcome `outcome'
+global exp_interest `drug'
+global seednum 121
+global logname $pathLogs/5_hk_`drug'_concom_`outcome'_v20241030
+global inputdataset "hk_uni_`drug'_covariate_concom"
+global event_rate_table $pathhk/table1/table1_rate_`drug'_concom_`outcome'.txt
+global output_table $pathhk/table1/table1_`drug'_concom_`outcome'.txt
+
+use "$pathFinal/hk_`drug'_covariate_outcome_final", clear
+rename patid groupid
+save "hk_uni_`drug'_covariate_concom", replace
+
+
+cap noi do "$pathDofiles/5_doac_interact_statin_model_univariable"
+		}
+}

@@ -1,0 +1,518 @@
+/*=========================================================================
+DO FILE NAME:			3_doac_interact_statin_covariates
+*=============================================================================*/
+
+/*******************************************************************************
+>> HOUSEKEEPING
+*******************************************************************************/
+capture log close
+
+/*******************************************************************************
+Identify file locations
+*******************************************************************************/
+* create a filename global that can be used throughout the file
+global filename "3_doac_interact_statin_covariates_v20240912"
+
+* open log file - no need as fast tool will create log files
+log using "${pathLogs}/${filename}", text replace
+
+
+************************************************
+*** AGE and SEX
+************************************************
+foreach expgrp in doac_concom doac_only {
+foreach a in expostatin simvastatin atorvastatin otherstatin_exclude_expostatin otherstatin_exclude_simvastatin otherstatin_exclude_atorvastatin { 
+
+use "$pathExposures/hk_af_`expgrp'_`a'_final", clear
+
+gen male = 1 if sex == "M"
+replace male = 0 if sex == "F"
+drop if male == .
+
+drop sex
+
+label var male "Male sex"
+
+* Create categorised age
+gen     agegroup=1 if age_index>=18 & age_index<40
+replace agegroup=2 if age_index>=40 & age_index<50
+replace agegroup=3 if age_index>=50 & age_index<60
+replace agegroup=4 if age_index>=60 & age_index<70
+replace agegroup=5 if age_index>=70 & age_index<80
+replace agegroup=6 if age_index>=80
+replace agegroup=. if age_index==.
+
+label var agegroup "Age group"
+
+label define agegroup 	1 "18-<40" ///
+						2 "40-<50" ///
+						3 "50-<60" ///
+						4 "60-<70" ///
+						5 "70-<80" ///
+						6 "80+"
+						
+label values agegroup agegroup
+
+gen 	age_chadsvas = 0 if age_index >= 18 & age_index < 65
+replace age_chadsvas = 1 if age_index >= 65 & age_index < 75
+replace age_chadsvas = 2 if age_index >= 75
+
+************************************************
+*** CALENDAR PERIODS at cohort entry
+************************************************
+gen calendar_year=year(indexdate) 
+
+tab calendar_year,m
+
+label var calendar_year "Calendar year at cohort entry"
+
+************************************************
+*** MERGE IN COMORBIDITY
+***COPD HF IHD DM PAD bleeding peptic ulcer af vte stroke/tia
+************************************************
+foreach comorbid in copd liver_disease alcohol obesity vte ///
+					hypertensive hf crd ihd ///
+					stroke_tia pud dm pad all_bleed mi stroke_dx {
+					
+merge 1:1 patid using "$pathCovariates/hk_`comorbid'", keepusing(eventdate) keep(match master) nogen 
+
+gen `comorbid' = 1 if eventdate!=. & eventdate <= indexdate
+bysort patid: egen `comorbid'_base = max(`comorbid')
+duplicates drop patid, force
+replace `comorbid'_base = 0 if `comorbid'_base == .
+drop eventdate `comorbid'
+
+label var `comorbid'_base "`comorbid' prevalence at cohort entry"
+}
+
+************************
+*** Prescriptions ever used in past 3 months
+*** PPIs aspirin antiplatelet antidepressants anticonvulsants
+*** ACEI/ARBs CCBs diuretics BBs digoxin NSAIDs
+*** corticosteroids cyclosporine statins 
+*** antifungals
+*** macrolides oestrogen
+************************
+foreach drug in aspirin antidepressant anticonvulsant antiplatelet digoxin ///
+				ppi ccb diuretics betablocker nsaid oralsteroid ///
+				statin oestrogen_like antifungal macrolide ssrisnri anticonvulsant_bleed ///
+				anticonvulsant_vte acei arb antidiabetic insulin llm {
+
+merge 1:m patid using "$pathCovariates/hk_af_`drug'_all", keepusing(rxst) keep(match master) nogen 
+rename rxst eventdate
+gen `drug'_past = 1 if eventdate!=. & indexdate-90<=eventdate & eventdate<=indexdate
+bysort patid: egen `drug' = max(`drug'_past)
+duplicates drop patid, force
+replace `drug' = 0 if `drug' == .
+drop eventdate `drug'_past
+
+label var `drug' "`drug' use at cohort entry"
+
+}
+
+* Diabetes for chadsvas score
+gen diabetes_base = dm_base
+replace diabetes_base = 1 if antidiabetic==1 | insulin==1
+tab diabetes_base
+tab dm_base
+
+label variable diabetes "diabetes dx rx prevalence at cohort entry for chadsvas score"
+
+* DM severity with insulin
+gen DM = dm_base
+replace DM = 1 if dm_base==0 & antidiabetic==1 & insulin==0
+replace DM = 2 if DM==1 & insulin==1
+
+label variable DM "diabetes dx rx prevalence with severity at cohort entry"
+
+
+************************
+*** Save final datasets (without polypharmacy information)
+************************
+save "$pathFinal/hk_`expgrp'_`a'_covariate", replace
+
+}
+}
+
+
+************************
+*** Polypharmacy
+************************
+
+use "$pathCldt/AF_all_rx_0923", clear 
+merge m:1 drugname using "$pathCodelists/bnf_new", keep(match master) nogen 
+gen bnf_new = bnf 
+replace bnf_new = therapeuticclassificationbnf if missing(bnf_new)
+count if missing(bnf_new)
+save "$pathCovariates/AF_all_rx_0923_new", replace
+
+foreach expgrp in doac_concom doac_only {
+foreach a in expostatin simvastatin atorvastatin otherstatin_exclude_expostatin otherstatin_exclude_simvastatin otherstatin_exclude_atorvastatin { 
+use "$pathFinal/hk_`expgrp'_`a'_covariate", clear
+keep patid indexdate 
+save "hk_`expgrp'_`a'_id", replace
+
+use "$pathCovariates/AF_all_rx_0923_new", clear
+merge m:1 patid using "hk_`expgrp'_`a'_id",keep (match master) nogen
+
+* Remove those with missing BNF chapter
+drop if missing(bnf_new)
+
+*within 90 days window
+keep if rxst != . & rxst>=indexdate-90 & rxst<=indexdate 
+
+* Remove duplicates within same BNF chapter
+duplicates drop patid bnf_new, force
+
+* Main analysis
+gen main_remove_bnf = .
+* Update the marker where BNF matches above ones - do not count targeted drugs
+#delimit ;
+loc mainexterm "
+"2.8.2" /*OAC*/
+
+";
+#delimit cr
+foreach word of local mainexterm {
+	di "`word': "
+	replace main_remove_bnf = 1 if bnf_new == "`word'"
+}
+
+
+*include all drugs
+gen systemic_route = 1
+gen main_analysis_for_counting = 1 if systemic_route == 1
+replace main_analysis_for_counting = 0  if main_analysis_for_counting == .
+replace main_analysis_for_counting = 0 if main_remove_bnf == 1
+replace main_analysis_for_counting = 0 if missing(main_analysis_for_counting)
+save "$pathCovariates/hk_`expgrp'_`a'_poly", replace
+
+rename main_analysis_for_counting counting_include_topical
+tab counting_include_topical,m
+
+drop systemic_route
+gen systemic_route = 1
+* Include some back according to routeofadministration
+* Update the marker where routeofadministration matches terms 
+* exclude topical drugs 
+#delimit ;
+loc route "
+"ear"
+"eye"
+"nasal"
+"intranasal"
+"ophthalmic"
+"otic"
+"topical"
+
+";
+#delimit cr
+foreach word of local route {
+	di "`word': "
+	replace systemic_route = 0 if regexm(route, "`word'")
+}
+
+gen counting_exclude_topical = 1 if systemic_route == 1
+replace counting_exclude_topical = 0  if counting_exclude_topical == .
+replace counting_exclude_topical = 0 if main_remove_bnf ==  1
+replace counting_exclude_topical = 0 if missing(counting_exclude_topical)
+tab counting_exclude_topical,m
+
+merge m:1 patid using "hk_`expgrp'_`a'_id"
+drop if _merge==1
+count if missing(bnf_new)
+count if counting_exclude_topical==1 
+replace counting_exclude_topical = 0 if missing(counting_exclude_topical)
+replace counting_exclude_topical = 0 if rxst<indexdate-90
+replace counting_exclude_topical = 0 if rxst>indexdate
+count if counting_exclude_topical==1
+drop _merge
+
+sort patid 
+
+drop if missing(bnf_new) 
+bysort patid: egen num_rx_main = total(counting_exclude_topical)
+* Create variables for polypharmacy
+duplicates drop patid, force
+rename num_rx_main polypharmacy
+keep patid polypharmacy 
+
+* Polypharmacy flag 
+gen polypharmacy_main = 1 if polypharmacy >= 5
+replace polypharmacy_main = 0 if polypharmacy < 5
+label var polypharmacy_main "polypharmacy (>=5 drugs) using BNF chapter without counting topical and targeted Rx"
+count if missing(polypharmacy_main)
+
+* Degree of polypharmacy flag 
+/*gen polypharmacy_degree_main = 0 if polypharmacy == 0*/
+gen polypharmacy_degree_main = 1 if polypharmacy >= 0 & polypharmacy <= 4 
+replace polypharmacy_degree_main = 2 if polypharmacy >= 5 & polypharmacy <= 9
+replace polypharmacy_degree_main = 3 if polypharmacy >= 10 
+count if missing(polypharmacy_degree_main)
+
+label var polypharmacy_degree_main "Polypharmacy degree without counting targeted Rx"
+label def polypharmacy_lbl 1 "0-4" 2 "5-9" 3 ">=10"
+label val polypharmacy_degree_main polypharmacy_lbl
+save "$pathCovariates/hk_`expgrp'_`a'_poly_count", replace
+
+use "$pathFinal/hk_`expgrp'_`a'_covariate", clear
+merge 1:1 patid using "$pathCovariates/hk_`expgrp'_`a'_poly_count"
+drop _merge 
+save "$pathFinal/hk_`expgrp'_`a'_covariate_poly", replace
+}
+}
+
+
+foreach expgrp in doac_concom doac_only {
+foreach a in expostatin simvastatin atorvastatin otherstatin_exclude_expostatin otherstatin_exclude_simvastatin otherstatin_exclude_atorvastatin { 
+use "$pathFinal/hk_`expgrp'_`a'_covariate_poly", clear
+
+/* Calculate CHA2DS2-VASc score */
+*https://clincalc.com/Cardiology/Stroke/CHADSVASC.aspx
+* Age component
+gen 	chadsvas_age = 0 if age_index >= 18 & age_index < 65
+replace chadsvas_age = 1 if age_index >= 65 & age_index < 75
+replace chadsvas_age = 2 if age_index >= 75
+
+* Sex component
+count if missing(male)
+gen 	chadsvas_sex = 1 if male == 0 /*female*/
+replace chadsvas_sex = 0 if male == 1 
+
+* Heart failure history component
+gen 	chadsvas_hf = 1 if hf_base == 1
+replace chadsvas_hf = 0 if chadsvas_hf == .
+
+* hypertension component
+gen 	chadsvas_ht = 1 if hypertensive_base == 1
+replace chadsvas_ht = 0 if chadsvas_ht == .
+						
+* Stroke/TIA/thromboembolism history component
+gen 	chadsvas_stroke= 2 if stroke_tia_base == 1 | vte_base == 1
+		/*ischemic_stroke_base == 1 | transient_ischemic_attack_base == 1 | venous_thromboembolism_base == 1*/
+		
+replace chadsvas_stroke = 0 if chadsvas_stroke == .
+
+* Vascular disease component (Mycardial infarction/Peripheral artery disease)
+gen 	chadsvas_vascular = 1 if mi_base == 1 | pad_base == 1
+		/*myocardial_infarction_base == 1 | peripheral_artery_disease_base == 1*/
+		
+replace chadsvas_vascular = 0 if chadsvas_vascular == .
+
+* Diabetes component 
+gen 	chadsvas_dm = 1 if diabetes_base == 1
+		 
+replace chadsvas_dm = 0 if chadsvas_dm == .
+
+* Calculate the score
+gen CHA2DS2_VASc_score = chadsvas_age + chadsvas_sex + chadsvas_hf + chadsvas_ht ///
+						+ chadsvas_stroke + chadsvas_vascular + chadsvas_dm	
+	
+drop chadsvas*	
+
+label var CHA2DS2_VASc_score "CHA2DS2-VASc score"
+
+
+
+/*calculate HAS-BLED score*/
+*https://clincalc.com/Cardiology/Anticoagulation/HASBLED.aspx
+
+* hypertension component
+gen 	hasbled_ht = 1 if hypertensive_base == 1
+replace hasbled_ht = 0 if hasbled_ht == .
+
+*abnormal renal function
+gen      hasbled_renal = 1 if crd_base == 1
+replace  hasbled_renal = 0 if hasbled_renal == .
+
+*abnormal liver function
+gen      hasbled_liver = 1 if liver_disease_base == 1
+replace  hasbled_liver = 0 if hasbled_liver == .
+
+*stroke
+gen 	hasbled_stroke = 1 if stroke_dx_base == 1 
+replace hasbled_stroke = 0 if hasbled_stroke == .
+
+*bleeding
+gen 	hasbled_bleeding= 1 if all_bleed_base == 1 
+		/*gastrointestinal_bleeding_base == 1 | intracranial_hemorrhage_base == 1 | other_bleeding_base == 1*/
+		
+replace hasbled_bleeding = 0 if hasbled_bleeding == .
+
+*INR
+*not include
+
+*Age
+gen 	hasbled_age = 1 if age_index >= 65
+replace hasbled_age = 0 if hasbled_age == .
+
+*drugs
+gen hasbled_drug = 1 if ///
+    antiplatelet == 1  |  nsaid == 1
+replace hasbled_drug = 0 if hasbled_drug == .
+
+*alcohol
+gen hasbled_alcohol = 1 if alcohol_base == 1 
+replace hasbled_alcohol = 0 if hasbled_alcohol == .
+
+*calculate the score
+gen hasbled_score = hasbled_ht + hasbled_renal + hasbled_liver + hasbled_stroke ///
+                    + hasbled_bleeding + hasbled_age + hasbled_drug + hasbled_alcohol
+rename hasbled_score  hasscore
+drop hasbled_*
+rename hasscore hasbled_score
+
+label var hasbled_score "hasbled score"
+	
+
+save "$pathFinal/hk_`expgrp'_`a'_covariate_poly_score", replace
+
+}
+}
+
+
+foreach expgrp in doac_concom doac_only {
+foreach a in expostatin simvastatin atorvastatin otherstatin_exclude_expostatin otherstatin_exclude_simvastatin otherstatin_exclude_atorvastatin { 
+
+use "$pathCldt/AF_all_dx_op_9323", clear
+merge m:1 patid using "hk_`expgrp'_`a'_id", keep (match) nogen
+*within 1-year window
+keep if eventdate>=indexdate-365 & eventdate<indexdate
+
+sort patid eventdate
+duplicates drop patid eventdate, force
+by patid: gen count = _n
+by patid: egen max_count = max(count)
+bysort patid indexdate max_count: keep if _n==1
+keep patid max_count
+label var max_count "OP admission visit within 1 year"
+rename max_count op_count
+gen op_count_cat = 0
+replace op_count_cat = 1 if op_count > 0 & op_count <= 12
+replace op_count_cat = 2 if op_count > 12
+label var op_count_cat "OP admission visit within 1 year categorical"
+label def op_count_cat 0 "0" 1 "1-12" 2 ">12" 
+label val op_count_cat op_count_cat
+save "$pathCovariates/hk_`expgrp'_`a'_op_count", replace
+
+
+use "$pathCldt/AF_all_ip_olp", clear
+merge m:1 patid using "hk_`expgrp'_`a'_id", keep (match) nogen
+*within 1-year window
+keep if eventdate>=indexdate-365 & eventdate<indexdate
+
+sort patid eventdate
+duplicates drop patid eventdate, force
+by patid: gen count = _n
+by patid: egen max_count = max(count)
+bysort patid indexdate max_count: keep if _n==1
+keep patid max_count
+label var max_count "IP admission visit within 1 year"
+rename max_count ip_count
+gen ip_count_cat = 0
+replace ip_count_cat = 1 if ip_count > 0 & ip_count <= 12
+replace ip_count_cat = 2 if ip_count > 12
+label var ip_count_cat "IP admission visit within 1 year categorical"
+label def ip_count_cat 0 "0" 1 "1-12" 2 ">12" 
+label val ip_count_cat ip_count_cat
+save "$pathCovariates/hk_`expgrp'_`a'_ip_count", replace
+
+
+use "$pathCldt/AF_all_dx_ae_9323", clear
+merge m:1 patid using "hk_`expgrp'_`a'_id", keep (match) nogen
+*within 1-year window
+keep if eventdate>=indexdate-365 & eventdate<indexdate
+
+sort patid eventdate
+duplicates drop patid eventdate, force
+by patid: gen count = _n
+by patid: egen max_count = max(count)
+bysort patid indexdate max_count: keep if _n==1
+keep patid max_count
+label var max_count "AE admission visit within 1 year"
+rename max_count ae_count
+gen ae_count_cat = 0
+replace ae_count_cat = 1 if ae_count > 0 & ae_count <= 12
+replace ae_count_cat = 2 if ae_count > 12
+label var ae_count_cat "AE admission visit within 1 year categorical"
+label def ae_count_cat 0 "0" 1 "1-12" 2 ">12" 
+label val ae_count_cat ae_count_cat
+save "$pathCovariates/hk_`expgrp'_`a'_ae_count", replace
+
+
+use "$pathFinal/hk_`expgrp'_`a'_covariate_poly_score", clear
+merge 1:1 patid using "$pathCovariates/hk_`expgrp'_`a'_ip_count", keep (match master)
+drop _merge
+replace ip_count=0 if ip_count==.
+replace ip_count_cat=0 if ip_count_cat==.
+merge 1:1 patid using "$pathCovariates/hk_`expgrp'_`a'_op_count", keep (match master)
+drop _merge
+replace op_count=0 if op_count==.
+replace op_count_cat=0 if op_count_cat==.
+merge 1:1 patid using "$pathCovariates/hk_`expgrp'_`a'_ae_count", keep (match master)
+drop _merge
+replace ae_count=0 if ae_count==.
+replace ae_count_cat=0 if ae_count_cat==.
+
+save "$pathFinal/hk_`expgrp'_`a'_covariate_poly_score_count", replace
+
+}
+}
+
+
+************************
+*Create files to combine all the exposure groups
+************************
+* exposed statins vs other statins (main)
+use "$pathFinal/hk_doac_concom_expostatin_covariate_poly_score_count", clear
+gen exposure = 1
+append using "$pathFinal/hk_doac_concom_otherstatin_exclude_expostatin_covariate_poly_score_count"
+replace exposure = 0 if exposure == .
+
+label var exposure "exposure groups"
+label def exposure 0 "doac plus non-interact statin" 1 "doac plus interact statin" 
+label val exposure exposure
+	
+save "$pathFinal/hk_expostatin_otherstatin_covariate_final", replace
+
+
+* simvastatin vs other statins (subgroup 2)
+use "$pathFinal/hk_doac_concom_simvastatin_covariate_poly_score_count", clear
+gen exposure = 1
+append using "$pathFinal/hk_doac_concom_otherstatin_exclude_simvastatin_covariate_poly_score_count"
+replace exposure = 0 if exposure == .
+
+label var exposure "exposure groups"
+label def exposure 0 "doac plus non-interact statin" 1 "doac plus interact statin" 
+label val exposure exposure
+	
+save "$pathFinal/hk_simvastatin_otherstatin_covariate_final", replace
+
+
+* atorvastatin vs other statins (subgroup 2)
+use "$pathFinal/hk_doac_concom_atorvastatin_covariate_poly_score_count", clear
+gen exposure = 1
+append using "$pathFinal/hk_doac_concom_otherstatin_exclude_atorvastatin_covariate_poly_score_count"
+replace exposure = 0 if exposure == .
+
+label var exposure "exposure groups"
+label def exposure 0 "doac plus non-interact statin" 1 "doac plus interact statin" 
+label val exposure exposure
+	
+save "$pathFinal/hk_atorvastatin_otherstatin_covariate_final", replace
+
+
+* exposed statins vs doac only (sen)
+use "$pathFinal/hk_doac_concom_expostatin_covariate_poly_score_count", clear
+gen exposure = 1
+append using "$pathFinal/hk_doac_only_expostatin_covariate_poly_score_count"
+replace exposure = 0 if exposure == .
+
+label var exposure "exposure groups"
+label def exposure 0 "doac only" 1 "doac plus interact statin" 
+label val exposure exposure
+	
+save "$pathFinal/hk_expostatin_doaconly_covariate_final", replace
+
+
+log close

@@ -1,0 +1,75 @@
+/*=========================================================================
+DO FILE NAME:			7_doac_interact_statin_model_PS_weighting
+
+AUTHOR:					Qiuyan Yu 
+						
+VERSION:				v1
+
+DATE VERSION CREATED: 	2024-Sept-03		
+	
+DESCRIPTION OF FILE:	
+						propensity score technique (weighting)
+						Because some people appear more than once in different exposure groups
+						Each person would have more than one weight and stcox doesn't allow it for weighting
+						Therefore, I put groupid as id() in stset for each data entry instead of each patient
+						
+
+MORE INFORMATION:	
+Global location Path for all do-files: 
+"doac_interact_paths.do"
+
+=========================================================================*/
+/*******************************************************************************
+Identify file locations
+*******************************************************************************/
+cap log close
+
+* open log file - no need as fast tool will create log files
+log using "$logname", text replace
+
+/*******************************************************************************/
+
+logistic $expvarname $psvarlist, base
+predict pscore, pr
+
+* Identify the max and min pscore by exposure for trimming
+bysort $expvarname: su pscore, detail
+bysort $expvarname: egen min_pscore = min(pscore)
+bysort $expvarname: egen max_pscore = max(pscore)
+
+* Trim the tails
+egen ps_lower_tail =  max(min_pscore)
+egen ps_upper_tail =  min(max_pscore)
+drop if pscore < ps_lower_tail
+drop if pscore > ps_upper_tail
+
+noi tab $expvarname $outcomevarname, m
+
+* Create ATE weights 
+gen ipw = 1/pscore if $expvarname == 1 
+replace ipw = 1/(1-pscore) if $expvarname == 0 
+
+summarize ipw, d
+
+drop min_pscore max_pscore ps_lower_tail ps_upper_tail	
+
+* Estimate the effect with PS weighting 
+stset stime_$outcomevarname [pweight = ipw], id(groupid) fail($outcomevarname) enter(indexdate) origin(indexdate)	
+stcox i.$expvarname, vce(robust) nohr level(95)
+lincom 1.$expvarname, eform level(95)
+
+* Output the estimates to text file
+cap file close tablecontent
+file open tablecontent using "$output_table", write text replace
+
+file write tablecontent ("$exp_interest $outcomevarname") _n
+file write tablecontent ("HR") _tab ("95% CI") _n
+
+
+file write tablecontent %4.2f (r(estimate)) _tab %4.2f (r(lb)) (" - ") %4.2f (r(ub)) _tab 
+
+
+file write tablecontent _n
+file close tablecontent
+
+log close

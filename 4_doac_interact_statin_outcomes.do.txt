@@ -1,0 +1,88 @@
+/*=========================================================================
+DO FILE NAME:			4_doac_interact_statin_outcomes
+Aim:
+key all history and incident outcome to all datasets
+
+identify any record after index date and before end date
+Not removing people who had history of outcome before index date
+For those occuring after index date and before end date, classify as outcome
+*=============================================================================*/
+
+/*******************************************************************************
+>> HOUSEKEEPING
+*******************************************************************************/
+capture log close
+
+/*******************************************************************************
+Identify file locations
+*******************************************************************************/
+* create a filename global that can be used throughout the file
+global filename "4_doac_interact_statin_outcomes_v20241023"
+
+* open log file - no need as fast tool will create log files
+log using "${pathLogs}/${filename}", text replace
+
+
+/*******************************************************************************/
+* Generate variables of outcomes recorded 
+/*******************************************************************************/
+foreach concom_drug in expostatin_otherstatin simvastatin_otherstatin atorvastatin_otherstatin expostatin_doaconly { 
+use "$pathFinal/hk_`concom_drug'_covariate_final", clear
+
+count
+local original_count = r(N)
+
+foreach outcome in stroke vte mi cvd major_bleed intracranial_bleed gi_bleed {
+						
+joinby patid using "$pathOutcomes/hk_af_`outcome'_final_all", unmatched(master) 
+gen h_`outcome' = 1 if eventdate != . & ///
+					eventdate > indexdate & eventdate <= enddate
+					
+replace h_`outcome' = 0 if h_`outcome' == .
+label var h_`outcome' "incident `outcome' occurred in the followup"
+
+gsort patid exposure -h_`outcome' eventdate
+bysort patid exposure: keep if _n == 1
+
+replace eventdate =. if h_`outcome' == 0
+gen stime_h_`outcome' = min(enddate, eventdate)
+
+label var stime_h_`outcome' "followup time of incident `outcome' occurred"
+
+drop eventdate _merge
+
+count
+local new_count = r(N)
+assert `original_count' == `new_count'
+}
+
+* Cardiovasular mortality
+merge m:1 patid using "$pathOutcomes/hk_af_cvd_death_uni", ///
+						keepusing(eventdate) keep(master match) nogen
+gen cvd_death = 1 if eventdate != . &  ///
+					eventdate > indexdate & eventdate <= enddate
+					
+replace cvd_death = 0 if cvd_death == .
+label var cvd_death "incident cvd death occurred in the followup"
+
+gen stime_cvd_death = min(enddate, eventdate)
+label var stime_cvd_death "followup time of cvd death occurred"
+
+drop eventdate
+
+* All-cause mortality
+
+gen all_death = 1 if dod != . & ///
+					dod > indexdate & dod <= enddate
+					
+replace all_death = 0 if all_death == .
+label var all_death "incident all-cause mortality occurred in the followup"
+
+gen stime_all_death = min(enddate, dod)
+label var stime_all_death "followup time of all-cause mortality occurred"
+
+
+save "$pathFinal/hk_`concom_drug'_covariate_outcome_final", replace
+}	
+
+log close					

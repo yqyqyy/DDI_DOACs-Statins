@@ -1,0 +1,53 @@
+/*=========================================================================
+DO FILE NAME:			0_doac_interact_statin_paths.do
+
+AUTHOR:					Qiuyan Yu
+VERSION:				v1
+DATE VERSION CREATED: 	2024-July-25
+						
+DESCRIPTION OF FILE:	Global macros for file paths
+
+*=========================================================================*/
+/*******************************************************************************
+# DO FILES
+*******************************************************************************/
+clear 
+set max_memory .
+
+cd
+cd "Stata Project/DOAC_Statin_Study" 
+
+* posted dofiles
+global pathDofiles	 		"dofiles"
+*global pathPrograms			"programs"
+
+/*******************************************************************************
+# DATASETS
+*******************************************************************************/
+global pathOut				"datafiles"	
+global pathCodelists 		"code_lists" // code lists
+*global pathCodelistsNew 		"updated_code_lists" // updated code lists 
+
+/******************************************************************************* 
+# OUTPUT
+*******************************************************************************/
+* log files
+global pathLogs "logfiles"
+
+* results text files
+global pathResults "writeup"
+
+global pathhk "$pathResults/hk" 
+global pathAF "../datafiles_raw/af1023"
+
+global pathCldt "$pathOut/1_clean_data"
+global pathCovariates "$pathOut/2_covariates"
+global pathOutcomes "$pathOut/3_outcomes"
+global pathExposures "$pathOut/4_exposures"
+global pathFinal "$pathOut/5_final_data"
+global pathSub "$pathOut/6_sub_data"
+global pathSen "$pathOut/7_sen_data"
+global pathDur "$pathOut/8_dur_data"
+global pathCCO "$pathOut/9_cco_data"
+global pathFP "$pathOut/10_fp_data"
+

@@ -1,0 +1,178 @@
+/*=========================================================================
+DO FILE NAME:			7_doac_interact_statin_call_model_PS_weighting
+
+DATE VERSION CREATED:	3 Sept 2024
+
+Aim:
+To call the action of running program (running Propensity score weighting (with multiple imputation)
+comparing DOAC + interacting statin and DOAC + non-interacting statin groups
+*=============================================================================*/
+
+*Outcome - major bleeding (ich bleed, gi bleed)	
+
+global psvarlist_total i. agegroup ///
+i. male ///
+i. copd_base ///
+i. obesity_base ///
+i. liver_disease_base ///
+i. hypertensive_base ///
+i. crd_base ///
+i. hf_base ///
+i. ihd_base ///
+i. stroke_tia_base ///
+i. DM ///
+i. pad_base ///
+i. vte_base ///
+i. all_bleed_base ///
+i. pud_base ///
+i. ppi ///
+i. aspirin ///
+i. antiplatelet ///
+i. ssrisnri ///
+i. anticonvulsant_bleed ///
+i. acei ///
+i. nsaid ///
+i. macrolide ///
+i. oralsteroid ///
+i. polypharmacy_main ///
+i. hasbled_score ///
+i. ip_count_cat ///
+i. op_count_cat ///
+i. ae_count_cat 
+	
+				
+foreach exp_interest in expostatin_otherstatin simvastatin_otherstatin atorvastatin_otherstatin expostatin_doaconly {
+		foreach outcome in h_major_bleed h_intracranial_bleed h_gi_bleed {
+
+global psvarlist_exclude  
+
+global exp_interest `exp_interest'
+global logname $pathLogs/7_hk_`exp_interest'_concom_`outcome'_v20250717
+global expvarname exposure
+global outcomevarname `outcome'
+global output_table $pathhk/table2/table2_`exp_interest'_concom_`outcome'.txt
+
+use "$pathFinal/hk_`exp_interest'_covariate_outcome_final", clear
+gen groupid = _n
+	
+label var age_chadsvas "Age group"
+
+drop if indexdate == enddate
+
+global psvarlist : list global(psvarlist_total) - global(psvarlist_exclude)
+
+cap noi do "$pathDofiles/7_doac_interact_statin_model_PS_weighting"
+
+}
+}	
+
+
+
+*Outcome - cvd outcomes	
+
+global psvarlist_total i. agegroup ///
+i. male ///
+i. copd_base ///
+i. obesity_base ///
+i. liver_disease_base ///
+i. hypertensive_base ///
+i. crd_base ///
+i. hf_base ///
+i. ihd_base ///
+i. stroke_tia_base ///
+i. DM ///
+i. pad_base ///
+i. vte_base ///
+i. aspirin ///
+i. antiplatelet ///
+i. anticonvulsant /// /*anticonvulsant_bleed*/
+i. acei ///
+i. arb ///
+i. ccb ///
+i. betablocker ///
+i. nsaid ///
+i. macrolide ///
+i. oestrogen_like ///
+i. llm ///
+i. polypharmacy_main ///
+i. CHA2DS2_VASc_score ///
+i. ip_count_cat ///
+i. op_count_cat ///
+i. ae_count_cat 
+	
+				
+foreach exp_interest in expostatin_otherstatin simvastatin_otherstatin atorvastatin_otherstatin expostatin_doaconly {
+		foreach outcome in h_cvd h_stroke h_mi h_vte cvd_death {
+
+global psvarlist_exclude  
+
+global exp_interest `exp_interest'
+global logname $pathLogs/7_hk_`exp_interest'_concom_`outcome'_v20250717
+global expvarname exposure
+global outcomevarname `outcome'
+global output_table $pathhk/table2/table2_`exp_interest'_concom_`outcome'.txt
+
+use "$pathFinal/hk_`exp_interest'_covariate_outcome_final", clear
+gen groupid = _n
+	
+label var age_chadsvas "Age group"
+
+drop if indexdate == enddate
+
+global psvarlist : list global(psvarlist_total) - global(psvarlist_exclude)
+
+cap noi do "$pathDofiles/7_doac_interact_statin_model_PS_weighting"
+
+}
+}	
+
+
+
+*Outcome - all-cause mortality	
+
+global psvarlist_total i. agegroup ///
+i. male ///
+i. copd_base ///
+i. obesity_base ///
+i. liver_disease_base ///
+i. hypertensive_base ///
+i. crd_base ///
+i. hf_base ///
+i. ihd_base ///
+i. stroke_tia_base ///
+i. DM ///
+i. pad_base ///
+i. vte_base ///
+i. all_bleed_base ///
+i. pud_base ///
+i. polypharmacy_main ///
+i. ip_count_cat ///
+i. op_count_cat ///
+i. ae_count_cat 
+	
+				
+foreach exp_interest in expostatin_otherstatin simvastatin_otherstatin atorvastatin_otherstatin expostatin_doaconly {
+		foreach outcome in all_death {
+
+global psvarlist_exclude  
+
+global exp_interest `exp_interest'
+global logname $pathLogs/7_hk_`exp_interest'_concom_`outcome'_v20250717
+global expvarname exposure
+global outcomevarname `outcome'
+global output_table $pathhk/table2/table2_`exp_interest'_concom_`outcome'.txt
+
+use "$pathFinal/hk_`exp_interest'_covariate_outcome_final", clear
+gen groupid = _n
+	
+label var age_chadsvas "Age group"
+
+drop if indexdate == enddate
+
+global psvarlist : list global(psvarlist_total) - global(psvarlist_exclude)
+
+cap noi do "$pathDofiles/7_doac_interact_statin_model_PS_weighting"
+
+}
+}
+

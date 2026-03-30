@@ -1,0 +1,1442 @@
+/*Derive all COVARIATES:
+1. Age
+2. Sex
+3. calendar year of prescription
+4. COPD
+5. Liver disease
+6. hypertension
+7. renal failure
+8. heart failure
+9. ischaemia heart disease
+10. ischaemic stroke/TIA 
+11. DM
+12. PAD
+13. bleeding 
+14. peptic ulcer
+15. PPIs 
+16. aspirin
+17. antiplatelet 
+18. antidepressants
+19. anticonvulsants
+20. ACEI/ARBs
+21. CCBs
+22. diuretics
+23. Beta blockers
+24. digoxin (done for study population do-file 2, move to do-file 1)
+25. NSAIDs
+26. corticosteroids
+27. statins 
+28. antifungal drugs
+29. macrolides 
+30. oestrogen/oestrogen like therapy
+*/
+
+/*********************************************************************
+*1. Combine IP files
+*********************************************************************/
+use "$pathAF/IP_93_23", clear
+
+gen eventdate = date(admissiondateyyyymmdd, "YMD")
+gen adm_date = substr(admissiondateyyyymmddhhmm,1,10)
+gen admd_format = date(adm_date, "YMD")
+format eventdate admd_format %td
+replace eventdate = admd_format if eventdate == .
+label var eventdate "admission date"
+
+rename referencekey patid 
+label variable eventdate "admission date"
+keep patid eventdate dischargedateyyyymmdd dischargedateyyyymmddhhmm dxpxrank dxpxcode dxpxdescriptionhamdct
+
+save "$pathOut/1_clean_data/AF_all_ip_9323", replace
+
+
+/*********************************************************************
+*2. Combine diagonsis files
+*********************************************************************/
+use "$pathAF/DX_93_23", clear
+
+gen eventdate = date(referencedate, "YMD")
+format eventdate %td
+
+rename referencekey patid
+keep patid eventdate alldiagnosiscodeicd9 alldiagnosisdescription
+
+save "$pathOut/1_clean_data/AF_all_dx_9323", replace
+
+
+/*********************************************************************
+*3. Extract Outpatient records from all dx files (for admission count)
+*********************************************************************/
+/*add for admission count use on 17 Aug*/
+*extract OP records from all diagnosis dataset
+use "$pathAF/DX_93_23", clear
+gen eventdate = date(referencedate, "YMD")
+format eventdate %td
+rename referencekey patid
+keep if patienttypeipopae=="O"
+keep patid eventdate alldiagnosiscodeicd9 alldiagnosisdescription
+
+save "$pathOut/1_clean_data/AF_all_dx_op_9323", replace
+
+
+/*********************************************************************
+*4. Extract Inpatient records from all dx files (for admission count)
+*********************************************************************/
+/*add for admission count use on 17 Aug*/
+*extract IP records from all diagnosis dataset
+use "$pathAF/DX_93_23", clear
+gen eventdate = date(referencedate, "YMD")
+format eventdate %td
+rename referencekey patid
+keep if patienttypeipopae=="I"
+keep patid eventdate alldiagnosiscodeicd9 alldiagnosisdescription
+
+save "$pathOut/1_clean_data/AF_all_dx_ip_9323", replace
+
+/*add on 2 Sept - check overlapped IP admission records*/
+use "$pathOut/1_clean_data/AF_all_ip_9323", clear
+gen dischargedate = substr(dischargedateyyyymmddhhmm,1,10)
+gen dischargedate_format = date(dischargedate, "YMD")
+drop if missing(dischargedate)
+drop if missing(dischargedate_format)
+format dischargedate_format %td
+drop dischargedate
+rename dischargedate_format dischargedate  
+label var dischargedate "discharge date"
+
+sort patid eventdate dischargedate
+keep patid eventdate dischargedate
+by patid: gen episode=_n
+
+rename eventdate timerxst
+rename dischargedate timerxen
+
+/************************************************************************
+**************************************************************************
+Start the steps of handling overlapping by reshaping the data
+************************************************************************
+*************************************************************************/
+reshape long time, i(patid episode) j(start_end) string
+
+*Encode the start and end for ranking the order for "rxst" first
+gen start_end2= 0 if start_end=="rxst"
+replace start_end2=1 if start_end=="rxen"
+
+by patid (time start_end2), sort: gen int in_proc = sum(start_end == "rxst") - sum(start_end == "rxen")
+replace in_proc = 1 if in_proc > 1
+by patid (time): gen block_num = 1 if in_proc == 1 & in_proc[_n-1] != 1
+by patid (time): replace block_num = sum(block_num)
+
+by patid block_num (time), sort: assert start_end == "rxst" if _n == 1
+by patid block_num (time): assert start_end == "rxen" if _n == _N
+by patid block_num (time): keep if _n == 1 | _n == _N
+
+drop episode in_proc start_end2
+reshape wide time, i(patid block_num) j(start_end) string
+rename time* *
+order rxst, before(rxen)
+
+by patid: gen episode=_n
+keep patid episode rxst rxen
+
+rename rxst timerxst
+rename rxen timerxen
+
+reshape long time, i(patid episode) j(start_end) string
+
+gen start_end2= 0 if start_end=="rxst"
+replace start_end2=1 if start_end=="rxen"
+
+by patid (time start_end2), sort: gen gap_num = 1 if start_end == "rxst" & (time- time[_n-1]<=1) //change the number of days here
+replace gap_num = 1 if start_end == "rxen" & gap_num[_n+1] == 1
+egen gap_num_max=max(gap_num), by (patid episode)
+
+keep if (gap_num_max==1 & gap_num==.) | (gap_num==. & gap_num_max ==.)
+
+drop gap_num gap_num_max episode start_end2
+
+*change the episode no as rx for reshaping the wide form
+egen rx =seq(), f(1) b(2)
+reshape wide time, i(patid rx) j(start_end) string
+rename time* *
+order rxst, before(rxen)
+
+count 
+
+keep patid rxst rxen
+rename rxst eventdate
+rename rxen dischargedate
+save "$pathOut/1_clean_data/AF_all_ip_olp", replace
+
+
+/*********************************************************************
+*5. Extract A&E records from all dx files (for admission count)
+*********************************************************************/
+/*add for admission count use on 17 Aug*/
+*extract AE records from all diagnosis dataset
+use "$pathAF/DX_93_23", clear
+gen eventdate = date(referencedate, "YMD")
+format eventdate %td
+rename referencekey patid
+keep if patienttypeipopae=="A"
+keep patid eventdate alldiagnosiscodeicd9 alldiagnosisdescription
+
+save "$pathOut/1_clean_data/AF_all_dx_ae_9323", replace
+
+
+/*********************************************************************
+*6. Combine drug files
+*********************************************************************/
+use "$pathAF/rx0923_ldnr", clear
+
+drop dispensinginstitution dispensingspecialtyphs multipledosageindicator therapeuticclassificationprincip
+gen rxst = date(prescriptionstartdate, "YMD")
+gen rxen = date(prescriptionenddate, "YMD")
+format rxst rxen %td
+
+label var rxst "prescription start date"
+label var rxen "prescription end date"
+
+drop prescriptionstartdate prescriptionenddate
+rename referencekey patid 
+
+save "$pathOut/1_clean_data/AF_all_rx_0923", replace
+
+
+/*********************************************************************
+*7. Combine demo files
+*********************************************************************/
+use "$pathAF/DEMO_24", clear
+
+rename referencekey patid
+rename dateofbirthyyyymmdd dateofbirth
+keep patid sex dateofbirth dateofregistereddeath deathcausemaincause deathcausedescriptionmaincauseic
+
+save "$pathOut/1_clean_data/demo", replace
+
+sort patid dateofbirth dateofregistereddeath
+duplicates drop patid sex dateofbirth dateofregistereddeath, force
+unique patid
+save "$pathOut/1_clean_data/demo_uni", replace
+
+
+/*********************************************************************
+*8. Extract covariates
+*********************************************************************/
+log using "${pathLogs}/1_extract_covariates_v20240910", text replace
+
+
+*COPD
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,3)=="490" | ///
+substr(alldiagnosiscodeicd9,1,3)=="491" | ////
+substr(alldiagnosiscodeicd9,1,3)=="492" | ////
+substr(alldiagnosiscodeicd9,1,3)=="494" | ///
+substr(alldiagnosiscodeicd9,1,3)=="496"
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_copd", replace
+
+
+*Liver disease
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,3)=="570" | ///
+substr(alldiagnosiscodeicd9,1,3)=="571" 
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_liver_disease", replace
+
+
+*Alcohol (alcohol-related disease - as proxy of alcohol for hasbled score)
+use "$pathCldt/AF_all_dx_9323", clear
+rename alldiagnosiscodeicd9 AllDiagnosisCodeICD9
+merge m:1 AllDiagnosisCodeICD9 using "$pathCodelists/icd9_alcohol.dta", keep(match) nogen
+rename AllDiagnosisCodeICD9 alldiagnosiscodeicd9
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_alcohol", replace
+
+
+*Hypertensive disease
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,3)=="401" | ///
+substr(alldiagnosiscodeicd9,1,3)=="402" | ///
+substr(alldiagnosiscodeicd9,1,3)=="403" | ///
+substr(alldiagnosiscodeicd9,1,3)=="404" | ///
+substr(alldiagnosiscodeicd9,1,3)=="405" 
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_hypertensive", replace
+
+
+*Obesity
+use "$pathCldt/AF_all_dx_9323", clear
+rename alldiagnosiscodeicd9 AllDiagnosisCodeICD9
+merge m:1 AllDiagnosisCodeICD9 using "$pathCodelists/obesity.dta", keep(match) nogen
+rename AllDiagnosisCodeICD9 alldiagnosiscodeicd9
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_obesity", replace
+
+
+*Chronic renal failure
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,3)=="585" | ///
+substr(alldiagnosiscodeicd9,1,3)=="586" 
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_crd", replace
+
+
+*heart failure //https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5372118/
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,3)=="428" 
+
+tab alldiagnosiscodeicd9, m
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_hf", replace
+
+
+*ischaemia heart disease
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,3)=="410" | ///
+substr(alldiagnosiscodeicd9,1,3)=="411" | ///
+substr(alldiagnosiscodeicd9,1,3)=="412" | ///
+substr(alldiagnosiscodeicd9,1,3)=="413" | ///
+substr(alldiagnosiscodeicd9,1,3)=="414" | ///
+substr(alldiagnosiscodeicd9,1,6)=="429.71" | ///
+substr(alldiagnosiscodeicd9,1,6)=="429.79" 
+
+tab alldiagnosiscodeicd9, m
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_ihd", replace
+
+
+*ischaemic stroke/TIA 
+use "$pathCldt/AF_all_dx_9323", clear
+rename alldiagnosiscodeicd9 icd9
+merge m:1 icd9 using "$pathCodelists/icd9_stroke", keep(match) nogen
+
+rename icd9 alldiagnosiscodeicd9
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_stroke_dx", replace
+
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,3)=="435"
+
+tab alldiagnosiscodeicd9, m
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_tia_dx", replace
+
+use "$pathCovariates/hk_stroke_dx", clear
+append using "$pathCovariates/hk_tia_dx"
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_stroke_tia", replace
+
+
+*DM
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,3)=="249" | ///
+substr(alldiagnosiscodeicd9,1,3)=="250"
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_dm", replace
+
+
+*PAD
+use "$pathCldt/AF_all_dx_9323", clear
+rename alldiagnosiscodeicd9 AllDiagnosisCodeICD9
+merge m:1 AllDiagnosisCodeICD9 using "$pathCodelists/peripheral_artery_disease.dta", keep(match) nogen
+rename AllDiagnosisCodeICD9 alldiagnosiscodeicd9
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_pad", replace
+
+
+*peptic ulcer //https://bmjopen.bmj.com/content/6/9/e011776
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,3)=="531" | ///
+substr(alldiagnosiscodeicd9,1,3)=="532" | ///
+substr(alldiagnosiscodeicd9,1,3)=="533" | ///
+substr(alldiagnosiscodeicd9,1,3)=="534" | ///
+substr(alldiagnosiscodeicd9,1,3)=="578" 
+
+tab alldiagnosiscodeicd9,m
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_pud", replace
+
+
+*All bleeding
+use "$pathCodelists/icd9_intracranial_bleed", clear
+append using "$pathCodelists/icd9_gi_bleed"
+append using "$pathCodelists/icd9_other_bleed"
+save "icd9_all_bleed", replace
+
+use "$pathCldt/AF_all_dx_9323", clear
+rename alldiagnosiscodeicd9 icd9
+merge m:1 icd9 using "icd9_all_bleed.dta", keep(match) nogen
+rename icd9 alldiagnosiscodeicd9
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_all_bleed", replace
+
+
+*VTE
+use "$pathCldt/AF_all_dx_9323", clear
+rename alldiagnosiscodeicd9 icd9
+merge m:1 icd9 using "$pathCodelists/icd9_vte.dta", keep(match) nogen
+rename icd9 alldiagnosiscodeicd9
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_vte", replace
+
+
+*MI
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,3)=="410" 
+
+sort patid eventdate
+by patid: keep if _n==1
+save "$pathCovariates/hk_mi", replace
+
+
+*aspirin
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm "  "*aspirin*" "*postmi*" "*danamep*" "*mandaprin*" "*atransipar*" "
+loc interm "`interm' "*asasantin*" "*enprin*" "*caprin*" "*imazin*" "
+loc interm "`interm' "*migramax*" "*micropirin*" "*co-codaprin*" "*aspro*" "
+loc interm "`interm' "*disprin*" "*angettes*" "*molita*" "*aspav*" "*nu-seals*" "
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+drop if route == "topical"
+save "$pathCovariates/hk_af_aspirin_all", replace 
+
+
+*antidepressants
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"amoxapine"
+"maprotiline"
+"oxitriptan"
+"tryptophan"
+"vortioxetine"
+"agomelatine" 
+"amitriptyline"
+"citalopram" 
+"clomipramine"
+"dosulepin"
+"doxepin"
+"duloxetine"
+"escitalopram"
+"fluoxetine"
+"flupenthixol"
+"flupentixol"
+"fluvoxamine"
+"imipramine"
+"isocarboxazid"
+"lofepramine"
+"mianserin" 
+"mirtazapine"
+"moclobemide"
+"nefazodone" 
+"nortriptyline"
+"paroxetine"
+"phenelzine"
+"reboxetine"
+"sertraline"
+"tranylcypromine"
+"trazodone"
+"trimipramine"
+"venlafaxine"
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+drop if regexm(drugname,"flupentixol decanoate") //other indications
+save "$pathCovariates/hk_af_antidepressant_all", replace
+
+
+*anticonvulsants
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"brivaracetam"
+"felbamate"
+"mesuximide"
+"stiripentol"
+"sultiame"
+"valproic acid"
+"paraldehyde"
+"carbamazepine" 
+"eslicarbazepine"
+"oxcarbazepine"
+"ethosuximide"
+"gabapentin" 
+"pregabalin" 
+"lacosamide" 
+"lamotrigine"
+"levetiracetam" 
+"perampanel"
+"phenobarbital"
+"primidone"
+"phenytoin" 
+"retigabine" 
+"rufinamide"
+"tiagabine"
+"topiramate"
+"valproate"
+"vigabatrin" 
+"zonisamide"
+"clobazam"
+"clonazepam"
+"diazepam"
+"fosphenytoin"
+"lorazepam"
+"midazolam"
+"phenytoin" 
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+drop if route == "rectal"
+save "$pathCovariates/hk_af_anticonvulsant_all", replace
+
+
+*ACEI
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"captopril"
+"cilazapril"
+"co-zidocapt" 
+"enalapril" 
+"fosinopril"
+"imidapril" 
+"lisinopril" 
+"moexipril"
+"perindopril" 
+"quinapril"
+"ramipril" 
+"trandolapril"
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+drop if route == "rectal"
+save "$pathCovariates/hk_af_acei_all", replace
+
+
+*ARBs
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"azilsartan" 
+"candesartan" 
+"eprosartan" 
+"irbesartan" 
+"losartan" 
+"olmesartan"
+"telmisartan" 
+"valsartan" 
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+drop if route == "rectal"
+save "$pathCovariates/hk_af_arb_all", replace
+
+
+*CCBs
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"amlodipine"
+"diltiazem" 
+"felodipine" 
+"isradipine"
+"lacidipine" 
+"lercanidipine" 
+"nicardipine"
+"nifedipine" 
+"nimodipine" 
+"verapamil"
+"nisoldipine"
+"clevidipine"
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+save "$pathCovariates/hk_af_ccb_all", replace
+
+
+*diuretics
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"amiloride"
+"bendroflumethiazide"
+"bendrofluazide"
+"benzthiazide"
+"bumetanide"
+"chlortalidone"
+"chlorthalidone"
+"chlorothiazide"
+"clopamide"
+"cyclopenthiazide"
+"eplerenone"
+"etacrynic acid"
+"furosemide"
+"frumil"
+"frusemide"
+"hydrochlorthiazide"
+"hydroflumethiazide"
+"indapamide"
+"lasix"
+"mefruside"
+"metolazone"
+"methyclothiazide"
+"moduret"
+"navidrex"
+"natrilix"     
+"piretanide"
+"polythiazide"
+"spironolactone"
+"torasemide"
+"triamterene"
+"xipamide"
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+
+#delimit ;
+loc exterm "
+"mannitol"
+"tolvaptan"
+";
+#delimit cr
+
+foreach word of local exterm {
+        replace marker = 2 if regexm(drugname,"`word'") & marker == 1
+         }
+
+drop if marker==2
+
+drop marker
+save "$pathCovariates/hk_af_diuretics_all", replace
+
+
+*Beta blockers
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"co-prenozide"
+"co-tenidone"
+"acebutolol" 
+"atenolol"
+"betaxolol" 
+"bisoprolol"
+"carvedilol"
+"carteolol"
+"celiprolol"
+"esmolol"
+"labetalol"
+"levobunolol"
+"metoprolol"
+"nadolol"
+"nebivolol"
+"oxprenolol"
+"penbutolol"
+"pindolol"
+"propranolol"
+"sotalol"
+"timolol"
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+
+drop if route== "eye" | ///
+route== "eye/ear" | ///
+route== "ophthalmic" | ///
+route== "topical" 
+drop if regexm(drugname, "eye drop")
+drop if regexm(drugname, "eyedrop")
+save "$pathCovariates/hk_af_betablocker_all", replace
+
+
+*NSAIDs
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"azapropazone"
+"benorilate"
+"diflunisal"
+"fenbufen"
+"lornoxicam"
+"lumiracoxib"
+"phenylbutazone"
+"aceclofenac"
+"acemetacin"
+"celecoxib"
+"dexibuprofen"
+"dexketoprofen"
+"diclofenac"
+"etodolac" 
+"etoricoxib" 
+"fenoprofen"
+"flurbiprofen"
+"ibuprofen"
+"indomethacin"
+"indometacin" 
+"ketoprofen"  
+"mefenamic acid" 
+"meloxicam" 
+"nabumetone"
+"naproxen" 
+"piroxicam"
+"proglumetacin"
+"rofecoxib"
+"sulindac"
+"tenoxicam"
+"tiaprofenic acid"
+"napratec op"
+
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+
+drop if route== "eye" | ///
+route== "rectal" | ///
+route== "ophthalmic" | ///
+route== "topical" | ///
+route== "transdermal"
+drop if regexm(drugname, "patch")
+
+save "$pathCovariates/hk_af_nsaid_all", replace
+
+
+*corticosteroids
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"prednisolone" 
+"dexamethasone"
+"cortisone"
+"beclometasone"
+"beclomethasone"
+"betamethasone"
+"budesonide"
+"deflazacort"
+"hydrocortisone"
+"methylprednisolone"
+"prednisone"
+"triamcinolone"
+"deltastab"
+"decortisyl"
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+
+keep if route == "oral"
+save "$pathCovariates/hk_af_oralsteroid_all", replace
+
+
+*statins 
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"atorvastatin" 
+"lipitor"
+"lovastatin"
+"simvastatin"
+"simvador"
+"zocor"
+"fluvastatin"
+"cadaff"
+"lescol"
+"nandovar"
+"pravastatin"
+"rosuvastatin"
+"crestor"
+
+"avastinee" "cholestat" "corstat" "covastin" "kardak" "lochol" "lonqs" "medisim" "qualicor" "simcard" "simgal" "simlofil" "simotin" "simplaqor" "simtas" "simtin" "simva-denk" "simvacor" "simvaret" "simvastatina" "simvatadin" "simvaterol" "simvatin" "simvell" "simvoget" "sinty" "sivacor" "stavid" "vas" "vascor" "vasilip" "vatatin" "vick-zocostatin" "vidastat" "zocor" "zostatin" 
+
+"aditor" "arpitor" "atacor" "atorcal" "atoris" "atorlip" "atorvaright" "atorvin" "atoty" "atstatin" "atv" "bastat" "biotor" "canstat" "carato" "divator" "emstat" "filstatin" "genalip" "jemator" "lesstrol" "lipicure" "lipidown" "lipidrest" "lipiduce" "lipiget" "lipikhan" "lipistad" "lipitor" "lipiwon" "lipomid" "optilip" "orvakline" "protorva" "sanlitor" "synpitor" "tiginor" "torvast" "uni-ator" "vaspitor" "vastin" "vick-lipidstatin" "xtor" "zopid"
+
+"cholvatin" "cysin" "lovatin" "lovestan" "lozutin" "medostatin" "ovastar" 
+
+"pravinat" "crestor" "rosuva" "rosuxl" "rovaset"  "rovista" 
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+
+tab drugitemcode,m 
+keep if therapeuticclassificationbnf=="2.12" | therapeuticclassificationbnf=="." | therapeuticclassificationbnf=="E" | therapeuticclassificationbnfprin=="2.12" | therapeuticclassificationbnfprin=="." | therapeuticclassificationbnfprin=="E" /*PROM06, S00033 - Rosuvastatin // RIVA07 // S00887, S00917 - Atorvastatin*/
+drop if drugitemcode=="MOME02" | drugitemcode=="S00073" | drugitemcode=="S01008" | drugitemcode=="VASO01" | drugitemcode=="VASO03"
+
+gen marker=.
+loc interm " "placebo" "
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+drop if marker==1 
+drop marker
+
+drop if drugitemcode=="RIVA01" | drugitemcode=="RIVA02" | drugitemcode=="RIVA03" | drugitemcode=="RIVA04" | drugitemcode=="RIVA05" | drugitemcode=="RIVA06" | drugitemcode=="RIVA07" | drugitemcode=="RIVA10"
+
+save "$pathCovariates/hk_af_statin_all", replace
+
+
+*lipid-lowering medications except statins 
+use "$pathCldt/AF_all_rx_0923", clear
+keep if therapeuticclassificationbnf=="2.12" | therapeuticclassificationbnfprin=="2.12" 
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"atorvastatin" 
+"lipitor"
+"lovastatin"
+"simvastatin"
+"simvador"
+"zocor"
+"fluvastatin"
+"cadaff"
+"lescol"
+"nandovar"
+"pravastatin"
+"rosuvastatin"
+"crestor"
+
+"avastinee" "cholestat" "corstat" "covastin" "kardak" "lochol" "lonqs" "medisim" "qualicor" "simcard" "simgal" "simlofil" "simotin" "simplaqor" "simtas" "simtin" "simva-denk" "simvacor" "simvaret" "simvastatina" "simvatadin" "simvaterol" "simvatin" "simvell" "simvoget" "sinty" "sivacor" "stavid" "vas" "vascor" "vasilip" "vatatin" "vick-zocostatin" "vidastat" "zocor" "zostatin" 
+
+"aditor" "arpitor" "atacor" "atorcal" "atoris" "atorlip" "atorvaright" "atorvin" "atoty" "atstatin" "atv" "bastat" "biotor" "canstat" "carato" "divator" "emstat" "filstatin" "genalip" "jemator" "lesstrol" "lipicure" "lipidown" "lipidrest" "lipiduce" "lipiget" "lipikhan" "lipistad" "lipitor" "lipiwon" "lipomid" "optilip" "orvakline" "protorva" "sanlitor" "synpitor" "tiginor" "torvast" "uni-ator" "vaspitor" "vastin" "vick-lipidstatin" "xtor" "zopid"
+
+"cholvatin" "cysin" "lovatin" "lovestan" "lozutin" "medostatin" "ovastar" 
+
+"pravinat" "crestor" "rosuva" "rosuxl" "rovaset"  "rovista" 
+
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker == 1	
+drop marker
+
+gen marker=.
+loc interm " "placebo" "
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+drop if marker==1 
+drop marker
+
+drop if drugitemcode=="SIMV01"
+save "$pathCovariates/hk_af_llm_all", replace
+
+
+*antifungal drugs
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"ketoconazole"
+"nizoral"
+"dandrazol"
+"itraconazole"
+"sporanox"
+"voriconazole"
+"vfend"
+"posaconazole"
+"noxafil"
+"fluconazole"
+"diflucan"
+"azocan"
+
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+
+drop if regexm(drugname, "shampoo")
+drop if route== "ophthalmic" | ///
+route== "topical" 
+save "$pathCovariates/hk_af_antifungal_all", replace
+
+
+*macrolides 
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"erythromycin"
+"erythrocin"
+"erythrolar"
+"erythroped"
+"clarithromycin"
+"clarie"
+"klaricid"
+"xetinin"
+"azithromycin"
+"zithromax"
+ 
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+drop if regexm(drugname, "lotion")
+drop if regexm(drugname, "placeb")
+drop if route== "topical" 
+save "$pathCovariates/hk_af_macrolide_all", replace
+
+
+*oestrogen/oestrogen like therapy
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"conjugated oestrogen"
+"dienestrol"
+"estradiol"
+"estriol"
+"mestranol"
+"estrone"
+"ethinylestradiol"
+"quinestradol"
+"raloxifene"
+"tamoxifen"
+"ospemifene"
+"toremifene"
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+save "$pathCovariates/hk_af_oestrogen_like_all", replace
+
+
+*SSRI/SNRI
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"duloxetine"
+"venlafaxine"
+"citalopram" 
+"escitalopram"
+"fluoxetine"
+"fluvoxamine"
+"paroxetine"
+"sertraline"
+"vortioxetine"
+
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+drop if route=="intraperitoneal" | route=="cutaneous"
+save "$pathCovariates/hk_af_ssrisnri_all", replace
+
+
+*Anticonvulsant bleed
+use "$pathCldt/AF_all_rx_0923", clear
+
+gen marker = 3
+
+#delimit ;
+loc interm "
+
+"ethosuximide"
+"valproate"
+"valporic"
+";
+#delimit cr
+
+*** update the marker where read term matches search terms
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+
+drop if marker != 1	
+drop marker
+save "$pathCovariates/hk_af_anticonvulsant_bleed_all", replace
+
+
+*Antiplatelet
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm " "*abciximab*" "*clopidogrel*" "*plavix*" "*dipyridamole*" "*attia*" "*ofcram*" "
+loc interm "`interm' "*eptifibatide*" "*integrilin*" "*prasugrel*" "*efient*" "
+loc interm "`interm' "*prafsia*" "*ticagrelor*" "*brilique*" "*ticlopidine*" "*tirofiban*" "
+loc interm "`interm' "*aggrastat*" "*cangrelor*" "*kengrexal*" "
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+save "$pathCovariates/hk_af_antiplatelet_all", replace
+
+
+*Digoxin
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm "  "*digoxin*" "*lanoxin*" "
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+tab route,m
+save "$pathCovariates/hk_af_digoxin_all", replace 
+
+
+*PPIs
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm " "*omeprazole*" "*losec*" "*mepradec*" "*mezzopram*" "*esomeprazole*" "
+loc interm "`interm' "*emozul*" "*nexium*" "*ventra*" "*pantoprazole*" "
+loc interm "`interm' "*protium*" "*rabeprazole*" "*pariet*" "*lansoprazole*" "
+loc interm "`interm' "*zoton fastab*" "
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+drop if drugname =="reventra tablet"
+save "$pathCovariates/hk_af_ppi_all", replace 
+
+
+*antidiabetic
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm " "*glimepiride*" "*amaryl*" "*niddaryl*" "*chlorpropamide*" "*glibenclamide*" "
+loc interm "`interm' "*daonil*"  "*euglucon*" "*diabetamide*" "
+loc interm "`interm' "*amglidia*" "*gliclazide*" "*diamicron*" "*diaglyk*" "
+loc interm "`interm' "*vivazide*" "*glimil*" "*nazdol*" "*edicil*" "
+loc interm "`interm' "*dacadis*" "*zicron*" "*vitile*" "*laaglyda*" "
+loc interm "`interm' "*ziclaseg*" "*vamju*" "*bilxona*" "*glydex*" "
+loc interm "`interm' "*lamzarin*" "*glipizide*" "*glibenese*" "*minodiab*" "
+loc interm "`interm' "*glurenorm*" "*tolbutamide*" "*metformin*" "*glucophage*" "
+loc interm "`interm' "*glyformin*" "*metsol*" "*bolamyn*" "*metabet*" "
+loc interm "`interm' "*glucient*" "*diagemet*" "*sukkarto*" "*meijumet*" "
+loc interm "`interm' "*yaltormin*" "*metuxtan*" "*acarbose*" "*glucobay*" "
+loc interm "`interm' "*galvus*" "*victoza*" "*saxenda*" "*onglyza*" "
+loc interm "`interm' "*janumet*" "*trajenta*" "*jentadueto*" "*forxiga*" "
+loc interm "`interm' "*komboglyze*" "*lyxumia*" "*vipdomet*" "*vipidia*" "
+loc interm "`interm' "*xigduo*" "*invokana*" "*jardiance*" "*vokanamet*" "
+loc interm "`interm' "*trulicity*" "*synjardy*" "*eperzan*" "*xultophy*" "
+loc interm "`interm' "*qtern*" "*ozempic*" "*steglatro*" "*glyxambi*" "
+loc interm "`interm' "*pioglitazone*" "*actos*" "*glizofar*" "*glidipion*" "
+loc interm "`interm' "*diabiom*" "*guarem*" "*repaglinide*" "*novonorm*" "
+loc interm "`interm' "*prandin*" "*enyglid*" "*avandia*" "*starlix*" "
+loc interm "`interm' "*avandamet*" "*sitagliptin*" "*competact*" "*januvia*" "
+loc interm "`interm' "*byetta*" "*bydureon*" "*eucreas*" "*glimepiride*" "
+loc interm "`interm' "*gliquidone*" "*vildagliptin*" "*liraglutide*" "*saxagliptin*" "
+loc interm "`interm' "*linagliptin*" "*dapagliflozin*" "*lixisenatide*" "*alogliptin*" "
+loc interm "`interm' "*empagliflozin*" "*canagliflozin*" "*dulaglutide*" "*albiglutide*" "
+loc interm "`interm' "*insulin*" "*semaglutide*" "*ertugliflozin*""
+loc interm "`interm' "*rosiglitazone*" "*nateglinide*" "*exenatide*" "
+
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+tab route,m
+drop if drugname =="reventra tablet"
+save "$pathCovariates/hk_af_antidiabetic_all", replace
+
+
+*insulin
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm " "*insulin*" "*protaphane*" "
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+tab route,m 
+drop if drugname =="reventra tablet"
+save "$pathCovariates/hk_af_insulin_all", replace
+
+
+*anticonvulsant vte
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm " "diazepam" "
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+tab route,m
+save "$pathCovariates/hk_af_anticonvulsant_vte_all", replace 
+
+
+log close 
+
+
+/*********************************************************************
+*6. Extract outcomes
+*********************************************************************/
+log using "${pathLogs}/1_extract_outcomes_v20240910", text replace
+
+
+*Stroke
+*extract records from inpatient dataset diagnosis codes
+use "$pathCldt/AF_all_ip_9323", clear
+rename dxpxcode icd9
+merge m:1 icd9 using "$pathCodelists/icd9_stroke", keep(match) nogen
+save "$pathOutcomes/af_stroke_allip", replace
+
+*extract records from AE dataset
+use "$pathCldt/AF_all_dx_ae_9323", clear
+rename alldiagnosiscodeicd9 icd9
+merge m:1 icd9 using "$pathCodelists/icd9_stroke", keep(match) nogen
+save "$pathOutcomes/af_stroke_allae", replace
+
+*combine records into one dataset
+use "$pathOutcomes/af_stroke_allae", clear
+append using "$pathOutcomes/af_stroke_allip"
+keep patid eventdate
+sort patid eventdate
+save "$pathOutcomes/hk_af_stroke_final_all", replace
+
+
+*MI
+*extract records from inpatient dataset diagnosis codes
+use "$pathCldt/AF_all_ip_9323", clear
+rename dxpxcode icd9
+keep if substr(icd9,1,3)=="410"
+save "$pathOutcomes/af_mi_allip", replace
+
+*extract records from all AE dataset
+use "$pathCldt/AF_all_dx_ae_9323", clear
+rename alldiagnosiscodeicd9 icd9
+keep if substr(icd9,1,3)=="410"
+save "$pathOutcomes/af_mi_allae", replace
+
+*extract records from cause of death
+use "$pathCldt/demo", clear
+rename deathcausemaincause alt_code
+merge m:1 alt_code using "$pathCodelists/codelist_MI_hes", keep(match) keepusing(alt_code) nogen
+gen eventdate=date(dateofregistereddeath, "YMD")
+format eventdate %td
+keep patid alt_code deathcausedescriptionmaincauseic eventdate
+save "$pathOutcomes/af_mi_death", replace
+
+*combine records into one dataset
+use "$pathOutcomes/af_mi_allae", clear
+use "$pathOutcomes/af_mi_allip", clear
+append using "$pathOutcomes/af_mi_death"
+keep patid eventdate 
+sort patid eventdate 
+save "$pathOutcomes/hk_af_mi_final_all", replace
+
+
+*VTE
+*extract records from inpatient dataset diagnosis codes
+use "$pathCldt/AF_all_ip_9323", clear
+rename dxpxcode icd9
+merge m:1 icd9 using "$pathCodelists/icd9_vte", keep(match) nogen
+save "$pathOutcomes/af_vte_allip", replace
+
+*extract records from all AE dataset
+use "$pathCldt/AF_all_dx_ae_9323", clear
+rename alldiagnosiscodeicd9 icd9
+merge m:1 icd9 using "$pathCodelists/icd9_vte", keep(match) nogen
+save "$pathOutcomes/af_vte_allae", replace
+
+*combine records into one dataset
+use "$pathOutcomes/af_vte_allae", clear
+append using "$pathOutcomes/af_vte_allip"
+keep patid eventdate
+sort patid eventdate
+save "$pathOutcomes/hk_af_vte_final_all", replace
+
+
+*Intracranial bleed
+*extract records from inpatient dataset diagnosis codes
+use "$pathCldt/AF_all_ip_9323", clear
+rename dxpxcode icd9
+merge m:1 icd9 using "$pathCodelists/icd9_intracranial_bleed", keep(match) nogen
+save "$pathOutcomes/af_intracranial_bleed_allip", replace
+
+*extract records from all AE dataset
+use "$pathCldt/AF_all_dx_ae_9323", clear
+rename alldiagnosiscodeicd9 icd9
+merge m:1 icd9 using "$pathCodelists/icd9_intracranial_bleed", keep(match) nogen
+save "$pathOutcomes/af_intracranial_bleed_allae", replace
+
+*combine records into one dataset
+use "$pathOutcomes/af_intracranial_bleed_allae", clear
+append using "$pathOutcomes/af_intracranial_bleed_allip"
+keep patid eventdate
+sort patid eventdate
+save "$pathOutcomes/hk_af_intracranial_bleed_final_all", replace
+
+
+*GI bleed
+*extract records from inpatient dataset diagnosis codes
+use "$pathCldt/AF_all_ip_9323", clear
+rename dxpxcode icd9
+merge m:1 icd9 using "$pathCodelists/icd9_gi_bleed", keep(match) nogen
+save "$pathOutcomes/af_gi_bleed_allip", replace
+
+*extract records from all AE dataset
+use "$pathCldt/AF_all_dx_ae_9323", clear
+rename alldiagnosiscodeicd9 icd9
+merge m:1 icd9 using "$pathCodelists/icd9_gi_bleed", keep(match) nogen
+save "$pathOutcomes/af_gi_bleed_allae", replace
+
+*combine records into one dataset
+use "$pathOutcomes/af_gi_bleed_allae", clear
+append using "$pathOutcomes/af_gi_bleed_allip"
+keep patid eventdate
+sort patid eventdate
+save "$pathOutcomes/hk_af_gi_bleed_final_all", replace
+
+
+*Major bleeding
+use "$pathOutcomes/hk_af_intracranial_bleed_final_all", clear
+append using "$pathOutcomes/hk_af_gi_bleed_final_all"
+sort patid eventdate 
+save "$pathOutcomes/hk_af_major_bleed_final_all", replace
+
+
+*CVD Death 
+
+*reformat the codelist_cvd_hes
+use "$pathCodelists/codelist_cvd_hes", clear
+gen first_icd = substr(icd,1,3)
+gen last_icd = substr(icd,5,5)
+gen alt_code = first_icd + last_icd
+drop first_icd last_icd
+save "codelist_cvd_hes", replace
+
+*extract records from cause of death
+use "$pathCldt/demo", clear
+rename deathcausemaincause alt_code
+merge m:1 alt_code using "codelist_cvd_hes", keep(match) nogen
+gen eventdate=date(dateofregistereddeath, "YMD")
+format eventdate %td
+keep patid alt_code deathcausedescriptionmaincauseic eventdate
+save "$pathOutcomes/hk_af_cvd_death", replace
+duplicates drop patid eventdate, force
+save "$pathOutcomes/hk_af_cvd_death_uni", replace
+
+
+*CVD outcomes
+use "$pathOutcomes/hk_af_mi_final_all", clear
+append using "$pathOutcomes/hk_af_stroke_final_all"
+append using "$pathOutcomes/hk_af_vte_final_all"
+append using "$pathOutcomes/hk_af_cvd_death"
+keep patid eventdate
+sort patid eventdate
+save "$pathOutcomes/hk_af_cvd_final_all", replace
+
+
+log close

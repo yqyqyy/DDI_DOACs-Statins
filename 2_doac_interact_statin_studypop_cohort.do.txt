@@ -1,0 +1,499 @@
+/*=========================================================================
+DO FILE NAME:			2_doac_interact_statin_studypop_cohort
+*=========================================================================*/
+
+capture log close
+* create a filename global that can be used throughout the file
+global filename "2_doac_interact_statin_studypop_cohort_v20240910"
+
+* open log file - no need as fast tool will create log files
+log using "${pathLogs}/${filename}", text replace
+*********************************************************************
+
+
+/*********************************************************************
+*1. identify AF diagnosis
+*********************************************************************/
+use "$pathCldt/AF_all_dx_9323", clear
+keep if substr(alldiagnosiscodeicd9,1,5)=="427.3" | ///
+substr(alldiagnosiscodeicd9,1,6)=="427.31" | ////
+substr(alldiagnosiscodeicd9,1,6)=="427.32" 
+
+tab alldiagnosiscodeicd9, m
+sort patid eventdate
+by patid: keep if _n==1
+save "hk_af_dx", replace
+
+use "$pathCldt/AF_all_ip_9323", clear
+keep if substr(dxpxcode,1,5)=="427.3" | ///
+substr(dxpxcode,1,6)=="427.31" | ////
+substr(dxpxcode,1,6)=="427.32" 
+
+tab dxpxcode, m
+sort patid eventdate
+by patid: keep if _n==1
+save "hk_af_ip", replace
+
+use "hk_af_dx", clear
+append using  "hk_af_ip"
+sort patid eventdate
+by patid: keep if _n==1
+rename eventdate af_date
+recast str patid /*add*/
+save "hk_first_af", replace
+
+/******************************************************************
+Extract drug exposure from All drugs dataset
+******************************************************************/
+*warfarin
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm "  "*warfarin*" "*coumadin*" "
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+drop if strmatch(drugname, "*placebo*")
+drop if drugname=="dabigatran or warfarin"
+gen drugtype="warfarin"
+save "hk_af_warfarin_all", replace 
+
+
+*DOAC
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm "  "*dabigatran*" "*pradaxa*" "*rivaroxaban*" "*xarelto*" "*apixaban*" "
+loc interm "`interm' "*eliquis*" "*edoxaban*" "*lixiana*" "*savaysa*" "
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+drop if strmatch(drugname, "*placebo*")
+drop if drugname=="dabigatran or warfarin"
+gen drugtype="doac"
+save "hk_af_doac_all", replace 
+
+
+*Simvastatin
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm " "*simvastatin*" "*simvador*" "*zocor*"   "avastinee" "cholestat" "corstat" "covastin" "kardak" "lochol" "lonqs" "medisim" "qualicor" "simcard" "simgal" "simlofil" "simotin" "simplaqor" "simtas" "simtin" "simva-denk" "simvacor" "simvaret" "simvastatina" "simvatadin" "simvaterol" "simvatin" "simvell" "simvoget" "sinty" "sivacor" "stavid" "vas" "vascor" "vasilip" "vatatin" "vick-zocostatin" "vidastat" "zocor" "zostatin" " /*2509589*/
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+tab route,m
+tab drugitemcode,m 
+
+gen marker=.
+loc interm " "placebo" "
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+drop if marker==1
+drop marker
+
+gen drugtype="simvastatin"
+save "hk_af_simvastatin_all", replace 
+
+
+*Atorvastatin
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm " "*atorvastatin*" "*lipitor*"   "aditor" "arpitor" "atacor" "atorcal" "atoris" "atorlip" "atorvaright" "atorvin" "atoty" "atstatin" "atv" "bastat" "biotor" "canstat" "carato" "divator" "emstat" "filstatin" "genalip" "jemator" "lesstrol" "lipicure" "lipidown" "lipidrest" "lipiduce" "lipiget" "lipikhan" "lipistad" "lipitor" "lipiwon" "lipomid" "optilip" "orvakline" "protorva" "sanlitor" "synpitor" "tiginor" "torvast" "uni-ator" "vaspitor" "vastin" "vick-lipidstatin" "xtor" "zopid" " /*1097622*/
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+tab route,m
+tab drugitemcode,m 
+
+gen marker=.
+loc interm " "placebo" "
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+drop if marker==1 /*84*/
+drop marker
+
+gen drugtype="atorvastatin"
+save "hk_af_atorvastatin_all", replace
+
+
+*Lovastatin
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm " "*lovastatin*"   "cholvatin" "cysin" "lovatin" "lovestan" "lozutin" "medostatin" "ovastar" "
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+tab route,m
+tab drugitemcode,m 
+
+gen marker=.
+loc interm " "placebo" "
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+drop if marker==1 /*0*/
+drop marker
+
+gen drugtype="lovastatin"
+save "hk_af_lovastatin_all", replace
+
+
+*Exposed statins
+use "hk_af_simvastatin_all", clear
+append using "hk_af_atorvastatin_all"
+append using "hk_af_lovastatin_all"
+save "hk_af_expostatin_all", replace
+
+
+*Other statins (Fluvastatin, Pravastatin, Rosuvastatin)
+use "$pathCldt/AF_all_rx_0923", clear
+
+loc interm " "*fluvastatin*" "*cadaff*"  "*lescol*" "*nandovar*" "*pravastatin*" "*rosuvastatin*" "*crestor*"   "pravinat" "crestor" "rosuva" "rosuxl" "rovaset"  "rovista" " /*185698*/
+
+// WORD SEARCH
+gen marker=.
+foreach word in `interm'{
+           replace marker = 9 if strmatch(drugname, "`word'")
+          }
+keep if marker==9
+drop marker
+tab route,m
+tab drugitemcode,m
+
+gen marker=.
+loc interm " "placebo" "
+foreach word of local interm {
+	di "`word': "
+	replace marker = 1 if regexm(drugname, "`word'")
+}
+drop if marker==1 /*0*/
+drop marker
+
+gen drugtype="otherstatin"
+save "hk_af_otherstatin_all", replace
+
+
+/*********************************************************************
+*5. Remove those without valid prescription end date for all drugs of interest
+see further information above
+*********************************************************************/
+foreach i in warfarin doac simvastatin atorvastatin lovastatin expostatin otherstatin { 
+use "hk_af_`i'_all", clear
+assert rxen !=.
+drop if rxen!=. & rxen<rxst
+
+keep patid drugtype dispensingdateyyyymmdd drugstrength dosage drugfrequency dispensingduration drugname rxst rxen
+
+save "hk_af_`i'_all", replace
+}
+
+/*********************************************************************************
+6. Handle overlapping prescriptions (main analysis) 
+*********************************************************************************/
+foreach i in warfarin doac simvastatin atorvastatin lovastatin expostatin otherstatin { 
+use "hk_af_`i'_all", clear
+sort patid rxst rxen
+keep patid rxst rxen
+by patid: gen episode=_n
+
+rename rxst timerxst
+rename rxen timerxen
+
+/************************************************************************
+**************************************************************************
+Start the steps of handling overlapping by reshaping the data
+************************************************************************
+*************************************************************************/
+reshape long time, i(patid episode) j(start_end) string
+
+*Encode the start and end for ranking the order for "rxst" first
+gen start_end2= 0 if start_end=="rxst"
+replace start_end2=1 if start_end=="rxen"
+
+by patid (time start_end2), sort: gen int in_proc = sum(start_end == "rxst") - sum(start_end == "rxen")
+replace in_proc = 1 if in_proc > 1
+by patid (time): gen block_num = 1 if in_proc == 1 & in_proc[_n-1] != 1
+by patid (time): replace block_num = sum(block_num)
+
+by patid block_num (time), sort: assert start_end == "rxst" if _n == 1
+by patid block_num (time): assert start_end == "rxen" if _n == _N
+by patid block_num (time): keep if _n == 1 | _n == _N
+
+drop episode in_proc start_end2
+reshape wide time, i(patid block_num) j(start_end) string
+rename time* *
+order rxst, before(rxen)
+
+by patid: gen episode=_n
+keep patid episode rxst rxen
+
+rename rxst timerxst
+rename rxen timerxen
+
+reshape long time, i(patid episode) j(start_end) string
+
+gen start_end2= 0 if start_end=="rxst"
+replace start_end2=1 if start_end=="rxen"
+
+by patid (time start_end2), sort: gen gap_num = 1 if start_end == "rxst" & (time- time[_n-1]<=1) //change the number of days here
+replace gap_num = 1 if start_end == "rxen" & gap_num[_n+1] == 1
+egen gap_num_max=max(gap_num), by (patid episode)
+
+keep if (gap_num_max==1 & gap_num==.) | (gap_num==. & gap_num_max ==.)
+
+drop gap_num gap_num_max episode start_end2
+
+*change the episode no as rx for reshaping the wide form
+egen rx =seq(), f(1) b(2)
+reshape wide time, i(patid rx) j(start_end) string
+rename time* *
+order rxst, before(rxen)
+
+count 
+
+keep patid rxst rxen
+
+save "$pathExposures/hk_af_`i'_Rx_calc_dur", replace
+}
+
+/************************************************************************
+*************************************************************************
+8. Identify four different exposure groups
+removed the ones who had prior other OACs
+************************************************************************
+*************************************************************************/
+foreach i in doac {
+foreach a in simvastatin atorvastatin lovastatin expostatin otherstatin { 
+use "$pathExposures/hk_af_`i'_Rx_calc_dur", clear
+rename rxst `i'_rxst
+rename rxen `i'_rxen
+joinby patid using "$pathExposures/hk_af_`a'_Rx_calc_dur", unmatched(master)
+rename rxst `a'_rxst
+rename rxen `a'_rxen
+keep if (`i'_rxst<= `a'_rxst & `a'_rxst<=`i'_rxen) ///
+ | (`i'_rxst<= `a'_rxen & `a'_rxen<=`i'_rxen) ///
+ | (`a'_rxst<= `i'_rxst & `i'_rxst<=`a'_rxen) ///
+ | (`a'_rxst<= `i'_rxen & `i'_rxen<=`a'_rxen) 
+ 
+gen concom_rxst=max(`i'_rxst, `a'_rxst)
+gen concom_rxen=min(`i'_rxen, `a'_rxen)
+sort patid concom_rxst concom_rxen
+
+capture {
+by patid: egen first_concom_rxst=min(concom_rxst)
+format first_concom_rxst concom_rxst concom_rxen %td
+gen order_initiation=1 if `i'_rxst < concom_rxst
+replace order_initiation=2 if `a'_rxst < concom_rxst
+replace order_initiation=3 if concom_rxst==`i'_rxst & concom_rxst==`a'_rxst
+count if order_initiation==.
+label define order_lbl 1 "DOAC initiation first" 2 "Other drugs initiation first" 3 "Both drugs initiation together"
+label values order_initiation order_lbl
+drop _merge
+save "$pathExposures/hk_af_`i'_overlap_`a'", replace
+}
+if _rc!=0 {
+noi di "`a' with `i' has no observation"
+}
+}
+}
+
+
+*DOAC + concomitant group
+foreach a in simvastatin atorvastatin lovastatin expostatin otherstatin { 
+use "$pathExposures/hk_af_doac_overlap_`a'", clear
+
+*find the first concomitant drug exp date as index date
+keep if first_concom_rxst==concom_rxst
+unique patid
+drop first_concom_rxst
+rename concom_rxst indexdate
+
+merge 1:1 patid using "$pathCldt/demo_uni", keep(master match) keepusing(sex dateofbirth dateofregistereddeath) nogen
+
+gen dob = date(dateofbirth, "YMD")
+gen dod = date(dateofregistereddeath, "YMD")
+format dob dod %td
+
+*Generate variable of age at index date
+gen age_index=(indexdate-dob)/365.25
+label var age "Age at time of first DOAC prescription" /*first concomitant prescription indexdate*/
+keep if age_index>=18
+
+unique patid
+
+*identify patient who had previous warfarin Rx before index date
+merge 1:m patid using "$pathExposures/hk_af_warfarin_Rx_calc_dur", ///
+ keep(master match) nogen force
+bysort patid: egen min_rxst=min(rxst)
+*remove patient who had previous warfarin Rx before index date
+drop if min_rxst!=. & min_rxst<=indexdate 
+drop rxst rxen
+
+cap duplicates drop patid, force
+rename min_rxst warfarin_cdate
+
+*add AF first date to the cohort
+merge 1:1 patid using "hk_first_af", ///
+keep(match) keepusing(af_date) nogen force
+
+*create study start and end dates
+gen st_st=mdy(01,01,2011) // study start date
+gen st_en=mdy(12,31,2023) // study end date
+format st_st st_en %d
+
+*set up study start and end date for each patient
+gen startdate=max(st_st, af_date)
+gen enddate=min(st_en, dod, concom_rxen, warfarin_cdate-1)
+format startdate enddate %td
+label var enddate "date of end of follow-up"
+
+*remove those study end date occured before study start date
+drop if enddate<startdate 
+unique patid
+drop if indexdate<startdate 
+unique patid
+drop if indexdate>enddate
+unique patid
+  
+keep patid indexdate concom_rxen order_initiation sex age_index enddate dod warfarin_cdate af_date 
+
+save "$pathExposures/hk_af_doac_concom_`a'_final", replace
+}
+
+
+* Exclude DOAC+otherstatin records if indexdate >= DOAC+expostatin start date
+
+foreach a in simvastatin atorvastatin lovastatin expostatin { 
+use "$pathExposures/hk_af_doac_concom_otherstatin_final", clear
+rename indexdate otherstatin_indexdate
+merge 1:1 patid using "$pathExposures/hk_af_doac_concom_`a'_final", keepusing(indexdate) keep(master match) nogen
+
+count if otherstatin_indexdate > indexdate & indexdate!=. /*1032*/
+drop if indexdate!=. & otherstatin_indexdate-indexdate<=90 & otherstatin_indexdate > indexdate /*142*/
+drop if indexdate!=. & otherstatin_indexdate==indexdate /*134*/
+count if indexdate!=. & otherstatin_indexdate<indexdate /*190*/
+count if indexdate!=. & otherstatin_indexdate-indexdate>90 /*890*/
+count if indexdate==. /*1742*/
+unique patid /*3098-142-134=2822*/
+
+drop indexdate
+rename otherstatin_indexdate indexdate
+save "$pathExposures/hk_af_doac_concom_otherstatin_exclude_`a'_final", replace
+}
+
+
+*DOAC only group (used in the sensitivity analysis)
+use "$pathExposures/hk_af_doac_Rx_calc_dur", clear
+sort patid rxst rxen
+*identifiy first DOAC prescription
+by patid: keep if _n==1
+rename rxst doac_rxst
+rename rxen doac_rxen
+unique patid
+*remove those had prior warfarin Rx
+merge 1:m patid using "$pathExposures/hk_af_warfarin_Rx_calc_dur", keepusing(rxst) keep(master match) nogen
+bysort patid: egen min_rxst=min(rxst)
+format min_rxst %td
+drop if min_rxst!=. & min_rxst<=doac_rxst  //remove all entries of those patients 
+drop rxst
+*identify right censored date (subsequent warfarin prescription)
+rename min_rxst warfarin_cdate
+duplicates drop patid, force
+unique patid /*66173*/
+save "doac_only_rm_warfarin", replace
+
+*identify the right censored date (1 day before concomitant prescription)
+foreach a in expostatin { 
+use "doac_only_rm_warfarin", clear
+merge 1:m patid using "$pathExposures/hk_af_doac_overlap_`a'", keepusing(concom_rxst) keep(master match) nogen
+noi di in red "Make sure below counting is 0"
+count if doac_rxst> concom_rxst & concom_rxst!=.
+bysort patid: egen concom_cdate=min(concom_rxst)
+format concom_cdate %td
+drop if concom_cdate!=. & doac_rxst==concom_cdate  //those in concomitant doac+drug group drop all entries for all those patients
+unique patid
+save "doac_only_rm_warfarin_`a'", replace
+keep if concom_cdate!=.
+duplicates drop patid, force
+keep patid concom_cdate
+save "doac_`a'_censored", replace
+}
+
+
+foreach a in expostatin { 
+use "doac_only_rm_warfarin_`a'", clear
+rename doac_rxst indexdate
+duplicates drop patid, force
+drop concom_cdate concom_rxst
+merge 1:1 patid using "doac_`a'_censored", keepusing(concom_cdate) keep(master match) nogen
+
+merge 1:1 patid using "$pathCldt/demo_uni", keep(master match) keepusing(sex dateofbirth dateofregistereddeath) nogen
+
+gen dob = date(dateofbirth, "YMD")
+gen dod = date(dateofregistereddeath, "YMD")
+format dob dod %td
+
+*Generate variable of age at index date
+gen age_index=(indexdate-dob)/365.25
+label var age "Age at index date"
+keep if age_index>=18
+unique patid /*28989*/
+
+*add AF first date to the cohort
+merge 1:1 patid using "hk_first_af", ///
+keep(match) keepusing(af_date) nogen force
+
+gen st_st=mdy(01,01,2011) // study start date
+gen st_en=mdy(12,31,2023) // study end date
+format st_st st_en %d
+
+*set up study start and end date for each patient
+gen startdate=max(st_st, af_date)
+gen enddate=min(st_en, dod, concom_cdate-1, doac_rxen, warfarin_cdate-1)
+format startdate enddate %td
+label var enddate "date of end of follow-up"
+
+*remove those study end date occured before study start date
+drop if enddate<startdate
+unique patid
+drop if indexdate<startdate
+unique patid
+drop if indexdate>enddate
+unique patid /*19841*/
+  
+keep patid indexdate doac_rxen age_index enddate dod concom_cdate warfarin_cdate af_date sex
+
+save "$pathExposures/hk_af_doac_only_`a'_final", replace
+}
+
+
+
+log close
