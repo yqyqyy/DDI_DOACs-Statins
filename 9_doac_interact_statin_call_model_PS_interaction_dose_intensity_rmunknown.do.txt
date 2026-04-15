@@ -1,0 +1,427 @@
+  
+*DOAC + precipitant drug vs DOAC + active comparator  
+*Outcomes - major bleeding
+
+global psvarlist_total i. agegroup ///
+i. male ///
+i. copd_base ///
+i. obesity_base ///
+i. liver_disease_base ///
+i. hypertensive_base ///
+i. crd_base ///
+i. hf_base ///
+i. ihd_base ///
+i. stroke_tia_base ///
+i. DM ///
+i. pad_base ///
+i. vte_base ///
+i. all_bleed_base ///
+i. pud_base ///
+i. ppi ///
+i. aspirin ///
+i. antiplatelet ///
+i. ssrisnri ///
+i. anticonvulsant_bleed ///
+i. acei ///
+i. nsaid ///
+i. macrolide ///
+i. oralsteroid ///
+i. polypharmacy_main ///
+i. hasbled_score ///
+i. ip_count_cat ///
+i. op_count_cat ///
+i. ae_count_cat 	
+
+				
+foreach exp_interest in expostatin_otherstatin {
+		foreach outcome in h_major_bleed h_intracranial_bleed h_gi_bleed {
+
+if "`exp_interest'" == "expostatin_otherstatin" global psvarlist_exclude 
+if "`exp_interest'" == "expostatin_otherstatin" global regularvarlist_exclude
+
+global exp_interest `exp_interest'
+global outcomevarname `outcome'
+global logname $pathLogs/9_hk_int_`exp_interest'_`outcome'_sub_rmunknownIntensity_v20250717
+global result_table_path $pathhk/table3_sub/hk_int_final_`exp_interest'_`outcome'_sub_rmunknownIntensity_v20250717.txt
+*global folder "$pathhk/int_pvalue/`exp_interest'"
+
+use "$pathFinal/hk_`exp_interest'_covariate_outcome_final", clear
+merge 1:1 patid exposure using "$pathSub/hk_`exp_interest'_doac_final_dose", ///
+keepusing(doac_type strength) keep(master match) nogen
+rename strength doac_strength
+
+merge 1:1 patid exposure using "$pathSub/hk_`exp_interest'_statin_final_dose", ///
+keepusing(statin_type strength) keep(master match) nogen
+rename strength statin_strength
+
+egen groupid = group(patid exposure)
+drop patid
+rename groupid patid
+
+label var age_chadsvas "Age group"
+
+drop if indexdate == enddate
+
+*dabigatran
+gen dose_level = 0 if doac_strength == 110 & doac_type == 2
+replace dose_level = 1 if doac_strength == 150 & doac_type == 2
+
+*rivaroxaban
+replace dose_level = 0 if doac_strength == 15 & doac_type == 3
+replace dose_level = 1 if doac_strength == 20 & doac_type == 3
+
+*apixaban
+replace dose_level = 0 if doac_strength == 2.5 & doac_type == 4
+replace dose_level = 1 if doac_strength == 5 & doac_type == 4
+
+*edoxaban
+replace dose_level = 0 if doac_strength == 30 & doac_type == 5
+replace dose_level = 1 if doac_strength == 60 & doac_type == 5
+
+*unknown
+replace dose_level = 2 if dose_level == .
+
+label var dose_level "level of doses"
+label def doselvl 0 "low dose" 1 "high dose" 2 "unknown"
+label val dose_level doselvl
+
+
+
+
+/*Updated statin intensity on 2 Nov 2024 to: 
+High intensity of statin was defined as when drug strength is 80mg for simvastatin, 40-80mg for atorvastatin, 20-40mg for rosuvastatin, while moderate intensity of statin was defined as 20-40mg for simvastatin, 10-20mg for atorvastatin, 80mg for fluvastatin, 5-10mg for rosuvastatin, 40-80mg for lovastatin, 40-80mg for pravastatin, and low intensity was 10mg for simvastatin, 5mg for atorvastatin, 10-20mg for lovastatin, 20-40mg for fluvastatin, 10-20mg for pravastatin*/
+
+replace statin_strength=999 if statin_strength==. 
+
+*simvastatin
+gen statin_level = 3 if statin_strength >= 80 & statin_strength <999 & statin_type == "simvastatin" 
+replace statin_level = 2 if statin_strength >= 20 & statin_strength <= 40 & statin_type == "simvastatin"
+replace statin_level = 1 if statin_strength <= 10 & statin_type == "simvastatin"
+
+*atorvastatin
+replace statin_level = 3 if statin_strength >= 40 & statin_strength <= 80 & statin_type == "atorvastatin"
+replace statin_level = 2 if statin_strength <= 30 & statin_strength >= 10 & statin_type == "atorvastatin"
+replace statin_level = 1 if statin_strength < 10 & statin_type == "atorvastatin" 
+
+*lovastatin
+replace statin_level = 2 if statin_strength >= 40 & statin_strength <= 80 & statin_type == "lovastatin"
+replace statin_level = 1 if statin_strength <= 20 & statin_strength >= 10 & statin_type == "lovastatin"
+
+*rosuvastatin
+replace statin_level = 3 if statin_strength >= 20 & statin_strength <= 40 & statin_type == "rosuvastatin"
+replace statin_level = 2 if statin_strength <= 10 & statin_type == "rosuvastatin" 
+
+*fluvastatin
+replace statin_level = 2 if statin_strength == 80 & statin_type == "fluvastatin"
+replace statin_level = 1 if statin_strength >= 20 & statin_strength <= 40 & statin_type == "fluvastatin"
+
+*pravastatin
+replace statin_level = 2 if statin_strength >= 40 & statin_strength <= 80 & statin_type == "pravastatin"
+replace statin_level = 1 if statin_strength >= 10 & statin_strength <= 30 & statin_type == "pravastatin"
+
+*unknown
+replace statin_level = 0 if statin_level == .
+rename statin_level statin_level2 
+
+label var statin_level2 "statin intensity level 2"
+label def statin_doselvl2 0 "unknown_statin" 1 "low intensity" 2 "moderate intensity" 3 "high intensity" 
+label val statin_level2 statin_doselvl2
+
+/* Added on 18 Feb 2025, to change the grouping due to small sample size of low-intensity */
+gen statin_level=statin_level2
+replace statin_level=1 if statin_level==2
+replace statin_level=2 if statin_level==3
+label var statin_level "statin intensity level"
+label def statin_doselvl 0 "unknown_statin" 1 "low/moderate intensity" 2 "high intensity" 
+label val statin_level statin_doselvl
+
+drop if statin_level == 0
+
+global psvarlist : list global(psvarlist_total) - global(psvarlist_exclude)
+
+cap noi do "$pathDofiles/9_doac_interact_statin_model_PS_interaction_dose_intensity_rmunknown.do"
+}
+}			
+	
+	
+	
+	
+	
+	
+
+*Outcome - cvd outcomes	
+global psvarlist_total i. agegroup ///
+i. male ///
+i. copd_base ///
+i. obesity_base ///
+i. liver_disease_base ///
+i. hypertensive_base ///
+i. crd_base ///
+i. hf_base ///
+i. ihd_base ///
+i. stroke_tia_base ///
+i. DM ///
+i. pad_base ///
+i. vte_base ///
+i. aspirin ///
+i. antiplatelet ///
+i. anticonvulsant /// /*anticonvulsant_bleed*/
+i. acei ///
+i. arb ///
+i. ccb ///
+i. betablocker ///
+i. nsaid ///
+i. macrolide ///
+i. oestrogen_like ///
+i. llm ///
+i. polypharmacy_main ///
+i. CHA2DS2_VASc_score ///
+i. ip_count_cat ///
+i. op_count_cat ///
+i. ae_count_cat 
+
+
+
+			
+foreach exp_interest in expostatin_otherstatin {
+		foreach outcome in h_cvd h_stroke h_mi h_vte cvd_death {
+
+if "`exp_interest'" == "expostatin_otherstatin" global psvarlist_exclude 
+if "`exp_interest'" == "expostatin_otherstatin" global regularvarlist_exclude
+
+global exp_interest `exp_interest'
+global outcomevarname `outcome'
+global logname $pathLogs/9_hk_int_`exp_interest'_`outcome'_sub_rmunknownIntensity_v20250218
+global result_table_path $pathhk/table3_sub/hk_int_final_`exp_interest'_`outcome'_sub_rmunknownIntensity_v20250218.txt
+*global folder "$pathhk/int_pvalue/`exp_interest'"
+
+use "$pathFinal/hk_`exp_interest'_covariate_outcome_final", clear
+merge 1:1 patid exposure using "$pathSub/hk_`exp_interest'_doac_final_dose", ///
+keepusing(doac_type strength) keep(master match) nogen
+rename strength doac_strength
+
+merge 1:1 patid exposure using "$pathSub/hk_`exp_interest'_statin_final_dose", ///
+keepusing(statin_type strength) keep(master match) nogen
+rename strength statin_strength
+
+egen groupid = group(patid exposure)
+drop patid
+rename groupid patid
+
+label var age_chadsvas "Age group"
+
+drop if indexdate == enddate
+
+*dabigatran
+gen dose_level = 0 if doac_strength == 110 & doac_type == 2
+replace dose_level = 1 if doac_strength == 150 & doac_type == 2
+
+*rivaroxaban
+replace dose_level = 0 if doac_strength == 15 & doac_type == 3
+replace dose_level = 1 if doac_strength == 20 & doac_type == 3
+
+*apixaban
+replace dose_level = 0 if doac_strength == 2.5 & doac_type == 4
+replace dose_level = 1 if doac_strength == 5 & doac_type == 4
+
+*edoxaban
+replace dose_level = 0 if doac_strength == 30 & doac_type == 5
+replace dose_level = 1 if doac_strength == 60 & doac_type == 5
+
+*unknown
+replace dose_level = 2 if dose_level == .
+
+label var dose_level "level of doses"
+label def doselvl 0 "low dose" 1 "high dose" 2 "unknown"
+label val dose_level doselvl
+
+
+
+replace statin_strength=999 if statin_strength==. 
+
+*simvastatin
+gen statin_level = 3 if statin_strength >= 80 & statin_strength <999 & statin_type == "simvastatin" 
+replace statin_level = 2 if statin_strength >= 20 & statin_strength <= 40 & statin_type == "simvastatin"
+replace statin_level = 1 if statin_strength <= 10 & statin_type == "simvastatin"
+
+*atorvastatin
+replace statin_level = 3 if statin_strength >= 40 & statin_strength <= 80 & statin_type == "atorvastatin"
+replace statin_level = 2 if statin_strength <= 30 & statin_strength >= 10 & statin_type == "atorvastatin"
+replace statin_level = 1 if statin_strength < 10 & statin_type == "atorvastatin" 
+
+*lovastatin
+replace statin_level = 2 if statin_strength >= 40 & statin_strength <= 80 & statin_type == "lovastatin"
+replace statin_level = 1 if statin_strength <= 20 & statin_strength >= 10 & statin_type == "lovastatin"
+
+*rosuvastatin
+replace statin_level = 3 if statin_strength >= 20 & statin_strength <= 40 & statin_type == "rosuvastatin"
+replace statin_level = 2 if statin_strength <= 10 & statin_type == "rosuvastatin" 
+
+*fluvastatin
+replace statin_level = 2 if statin_strength == 80 & statin_type == "fluvastatin"
+replace statin_level = 1 if statin_strength >= 20 & statin_strength <= 40 & statin_type == "fluvastatin"
+
+*pravastatin
+replace statin_level = 2 if statin_strength >= 40 & statin_strength <= 80 & statin_type == "pravastatin"
+replace statin_level = 1 if statin_strength >= 10 & statin_strength <= 30 & statin_type == "pravastatin"
+
+
+*unknown
+replace statin_level = 0 if statin_level == .
+rename statin_level statin_level2 
+
+label var statin_level2 "statin intensity level 2"
+label def statin_doselvl2 0 "unknown_statin" 1 "low intensity" 2 "moderate intensity" 3 "high intensity" 
+label val statin_level2 statin_doselvl2
+
+/* Added on 18 Feb 2025, to change the grouping due to small sample size of low-intensity */
+gen statin_level=statin_level2
+replace statin_level=1 if statin_level==2
+replace statin_level=2 if statin_level==3
+label var statin_level "statin intensity level"
+label def statin_doselvl 0 "unknown_statin" 1 "low/moderate intensity" 2 "high intensity" 
+label val statin_level statin_doselvl
+
+
+drop if statin_level == 0
+
+global psvarlist : list global(psvarlist_total) - global(psvarlist_exclude)
+
+cap noi do "$pathDofiles/9_doac_interact_statin_model_PS_interaction_dose_intensity_rmunknown.do"
+}
+}			
+
+
+
+*Outcome - all-cause mortality	
+
+global psvarlist_total i. agegroup ///
+i. male ///
+i. copd_base ///
+i. obesity_base ///
+i. liver_disease_base ///
+i. hypertensive_base ///
+i. crd_base ///
+i. hf_base ///
+i. ihd_base ///
+i. stroke_tia_base ///
+i. DM ///
+i. pad_base ///
+i. vte_base ///
+i. all_bleed_base ///
+i. pud_base ///
+i. polypharmacy_main ///
+i. ip_count_cat ///
+i. op_count_cat ///
+i. ae_count_cat 
+
+			
+foreach exp_interest in expostatin_otherstatin {
+		foreach outcome in all_death {
+
+if "`exp_interest'" == "expostatin_otherstatin" global psvarlist_exclude 
+if "`exp_interest'" == "expostatin_otherstatin" global regularvarlist_exclude
+
+global exp_interest `exp_interest'
+global outcomevarname `outcome'
+global logname $pathLogs/9_hk_int_`exp_interest'_`outcome'_sub_rmunknownIntensity_v20250218
+global result_table_path $pathhk/table3_sub/hk_int_final_`exp_interest'_`outcome'_sub_rmunknownIntensity_v20250218.txt
+*global folder "$pathhk/int_pvalue/`exp_interest'"
+
+use "$pathFinal/hk_`exp_interest'_covariate_outcome_final", clear
+merge 1:1 patid exposure using "$pathSub/hk_`exp_interest'_doac_final_dose", ///
+keepusing(doac_type strength) keep(master match) nogen
+rename strength doac_strength
+
+merge 1:1 patid exposure using "$pathSub/hk_`exp_interest'_statin_final_dose", ///
+keepusing(statin_type strength) keep(master match) nogen
+rename strength statin_strength
+
+egen groupid = group(patid exposure)
+drop patid
+rename groupid patid
+
+label var age_chadsvas "Age group"
+
+drop if indexdate == enddate
+
+*dabigatran
+gen dose_level = 0 if doac_strength == 110 & doac_type == 2
+replace dose_level = 1 if doac_strength == 150 & doac_type == 2
+
+*rivaroxaban
+replace dose_level = 0 if doac_strength == 15 & doac_type == 3
+replace dose_level = 1 if doac_strength == 20 & doac_type == 3
+
+*apixaban
+replace dose_level = 0 if doac_strength == 2.5 & doac_type == 4
+replace dose_level = 1 if doac_strength == 5 & doac_type == 4
+
+*edoxaban
+replace dose_level = 0 if doac_strength == 30 & doac_type == 5
+replace dose_level = 1 if doac_strength == 60 & doac_type == 5
+
+*unknown
+replace dose_level = 2 if dose_level == .
+
+label var dose_level "level of doses"
+label def doselvl 0 "low dose" 1 "high dose" 2 "unknown"
+label val dose_level doselvl
+
+
+replace statin_strength=999 if statin_strength==. 
+
+*simvastatin
+gen statin_level = 3 if statin_strength >= 80 & statin_strength <999 & statin_type == "simvastatin" 
+replace statin_level = 2 if statin_strength >= 20 & statin_strength <= 40 & statin_type == "simvastatin"
+replace statin_level = 1 if statin_strength <= 10 & statin_type == "simvastatin"
+
+*atorvastatin
+replace statin_level = 3 if statin_strength >= 40 & statin_strength <= 80 & statin_type == "atorvastatin"
+replace statin_level = 2 if statin_strength <= 30 & statin_strength >= 10 & statin_type == "atorvastatin"
+replace statin_level = 1 if statin_strength < 10 & statin_type == "atorvastatin" 
+
+*lovastatin
+replace statin_level = 2 if statin_strength >= 40 & statin_strength <= 80 & statin_type == "lovastatin"
+replace statin_level = 1 if statin_strength <= 20 & statin_strength >= 10 & statin_type == "lovastatin"
+
+*rosuvastatin
+replace statin_level = 3 if statin_strength >= 20 & statin_strength <= 40 & statin_type == "rosuvastatin"
+replace statin_level = 2 if statin_strength <= 10 & statin_type == "rosuvastatin" 
+
+*fluvastatin
+replace statin_level = 2 if statin_strength == 80 & statin_type == "fluvastatin"
+replace statin_level = 1 if statin_strength >= 20 & statin_strength <= 40 & statin_type == "fluvastatin"
+
+*pravastatin
+replace statin_level = 2 if statin_strength >= 40 & statin_strength <= 80 & statin_type == "pravastatin"
+replace statin_level = 1 if statin_strength >= 10 & statin_strength <= 30 & statin_type == "pravastatin"
+
+
+
+*unknown
+replace statin_level = 0 if statin_level == .
+rename statin_level statin_level2 
+
+label var statin_level2 "statin intensity level 2"
+label def statin_doselvl2 0 "unknown_statin" 1 "low intensity" 2 "moderate intensity" 3 "high intensity" 
+label val statin_level2 statin_doselvl2
+
+/* Added on 18 Feb 2025, to change the grouping due to small sample size of low-intensity */
+gen statin_level=statin_level2
+replace statin_level=1 if statin_level==2
+replace statin_level=2 if statin_level==3
+label var statin_level "statin intensity level"
+label def statin_doselvl 0 "unknown_statin" 1 "low/moderate intensity" 2 "high intensity" 
+label val statin_level statin_doselvl
+
+drop if statin_level == 0
+
+global psvarlist : list global(psvarlist_total) - global(psvarlist_exclude)
+
+cap noi do "$pathDofiles/9_doac_interact_statin_model_PS_interaction_dose_intensity_rmunknown.do"
+}
+}			
+
+	
+	

@@ -1,0 +1,193 @@
+/*=========================================================================
+DO FILE NAME:			9_doac_interact_statin_model_PS_interaction_dose
+
+AUTHOR:					Qiuyan Yu	
+						
+VERSION:				v1
+
+DATE VERSION CREATED: 	2024-Sept-18
+
+MORE INFORMATION:	
+
+Steps:
+1. To run the initial PS MI to obtain the point estimate
+2. Run the interaction test
+*=========================================================================*/
+
+/*******************************************************************************
+Identify file locations
+*******************************************************************************/
+* open log file - no need as fast tool will create log files
+cap log close
+log using "$logname", text replace
+
+/**********************************************************************
+* Perform regression with PS
+**********************************************************************/
+logistic exposure $psvarlist, base
+predict pscore, pr
+
+* Identify the max and min pscore by exposure for trimming
+bysort exposure: su pscore, detail
+bysort exposure: egen min_pscore = min(pscore)
+bysort exposure: egen max_pscore = max(pscore)
+
+* Trim the tails
+egen ps_lower_tail =  max(min_pscore)
+egen ps_upper_tail =  min(max_pscore)
+drop if pscore < ps_lower_tail
+drop if pscore > ps_upper_tail
+
+noi tab exposure $outcomevarname, m
+
+* Create ATE weights 
+gen ipw = 1/pscore if exposure == 1 
+replace ipw = 1/(1-pscore) if exposure == 0 
+
+summarize ipw, d
+
+gen ipw_f = round(ipw*100) 
+
+local lab0: label exposure 0
+local lab1: label exposure 1
+
+drop min_pscore max_pscore ps_lower_tail ps_upper_tail
+
+* Estimate the effect with PS weighting
+stset stime_$outcomevarname [pweight = ipw], id(patid) fail($outcomevarname) enter(indexdate) origin(indexdate)	
+
+save "interaction_tempfile_type_rmunknown", replace
+
+* Save estimate and SE from each imputed dataset
+cap file close tablecontent
+file open tablecontent using "$result_table_path", write text replace
+
+* Column headings 
+file write tablecontent ("subgroup_name") _tab ("subgroup") _tab ("hr") _tab ("99%CI") _n
+
+* Age group
+stcox i.exposure##i.age_chadsvas, vce(robust) level(99)
+foreach i in 0 1 2 {
+lincom 1.exposure + `i'.age_chadsvas#1.exposure, eform level(99)  
+
+file write tablecontent ("Age_group") _tab (`i') _tab %4.3f (r(estimate)) _tab %4.2f (r(lb)) (" - ") %4.2f (r(ub)) _n
+}
+
+*Sex
+stcox i.exposure##i.male, vce(robust) level(99)
+foreach i in 0 1 {
+lincom 1.exposure + `i'.male#1.exposure, eform level(99)  
+
+file write tablecontent ("Sex") _tab (`i') _tab %4.3f (r(estimate)) _tab %4.2f (r(lb)) (" - ") %4.2f (r(ub)) _n
+}
+
+*Individal DOAC
+stcox i.exposure##i.doac_type, vce(robust) level(99)
+foreach i in 1 2 3 4 5 {
+lincom 1.exposure + `i'.doac_type#1.exposure, eform level(99)  
+
+file write tablecontent ("doac_type") _tab (`i') _tab %4.3f (r(estimate)) _tab %4.2f (r(lb)) (" - ") %4.2f (r(ub)) _n
+}
+
+*dose level
+stcox i.exposure##i.dose_level, vce(robust) level(99)
+	forval i = 0/2 {
+	lincom 1.exposure + `i'.dose_level#1.exposure, eform level(99)  
+	file write tablecontent ("dose level") _tab (`i') _tab  %4.3f (r(estimate)) _tab %4.2f (r(lb)) (" - ") %4.2f (r(ub)) _n
+	}
+
+*statin level
+stcox i.exposure##i.statin_level, vce(robust) level(99) /* forval i = 0/3, updated on 18 Feb 2025 */
+	forval i = 1/2 { 
+	lincom 1.exposure + `i'.statin_level#1.exposure, eform level(99)  
+	file write tablecontent ("statin intensity level") _tab (`i') _tab  %4.3f (r(estimate)) _tab %4.2f (r(lb)) (" - ") %4.2f (r(ub)) _n
+	}
+
+*order initiation
+stcox i.exposure##i.order_initiation, vce(robust) level(99)
+	forval i = 1/3 {
+	lincom 1.exposure + `i'.order_initiation#1.exposure, eform level(99)  
+	file write tablecontent ("drug initiation order") _tab (`i') _tab  %4.3f (r(estimate)) _tab %4.2f (r(lb)) (" - ") %4.2f (r(ub)) _n
+	}
+	
+/*
+*Polypharmacy
+stcox i.exposure##i.polypharmacy_main, vce(robust) level(99)
+foreach i in 0 1 {
+lincom 1.exposure + `i'.polypharmacy_main#1.exposure, eform level(99)
+
+file write tablecontent ("Polypharmacy") _tab (`i') _tab %4.3f (r(estimate)) _tab %4.3f (r(se)) _tab %4.2f (r(lb)) (" - ") %4.2f (r(ub)) _n
+}
+
+*history of GIB
+stcox i.exposure##i.gib_base, vce(robust) level(99)
+foreach i in 0 1 {
+lincom 1.exposure + `i'.gib_base#1.exposure, eform level(99)
+
+file write tablecontent ("GI bleeding") _tab (`i') _tab %4.3f (r(estimate)) _tab %4.3f (r(se)) _tab %4.2f (r(lb)) (" - ") %4.2f (r(ub)) _n
+}
+*/
+
+/*****************************************************
+ Get interaction p-values for binary effect modifier
+ ******************************************************/
+
+* Column headings 
+file write tablecontent ("subgroup_name") _tab ("log_hr") _tab ("Standarderror") _n
+
+*Sex
+stcox i.exposure##i.male, vce(robust) nohr level(99)
+lincom 1.male#1.exposure
+file write tablecontent ("Sex_p") _tab %4.3f (r(p)) _n
+
+/*
+*Polypharmacy
+stcox i.exposure##i.polypharmacy_main, vce(robust) nohr level(99)
+lincom 1.polypharmacy_main#1.exposure
+file write tablecontent ("Polypharmacy_p") _tab %4.3f (r(p)) _n
+
+* history of GIB
+stcox i.exposure##i.gib_base, vce(robust) nohr level(99)
+lincom 1.gib_base#1.exposure
+file write tablecontent ("GI bleeding_p") _tab %4.3f (r(p)) _n
+*/
+
+*Age group
+stcox i.exposure##i.age_chadsvas, vce(robust) level(99)
+testparm i.exposure#i.age_chadsvas
+file write tablecontent ("agechadsvas_p") _tab %4.3f (r(p)) _n
+
+*Individal DOAC
+stcox i.exposure##i.doac_type, vce(robust) level(99)
+testparm i.exposure#i.doac_type
+file write tablecontent ("doactype_p") _tab %4.3f (r(p)) _n
+
+*Dose level
+stcox i.exposure##i.dose_level, vce(robust) level(99)
+testparm i.exposure#i.dose_level
+file write tablecontent ("doselevel_p") _tab %4.3f (r(p)) _n
+
+*Statin intensity level
+stcox i.exposure##i.statin_level, vce(robust) level(99)
+testparm i.exposure#i.statin_level
+file write tablecontent ("statinlevel_p") _tab %4.3f (r(p)) _n
+
+*Drug initiation order
+stcox i.exposure##i.order_initiation, vce(robust) level(99)
+testparm i.exposure#i.order_initiation
+file write tablecontent ("orderinitiation_p") _tab %4.3f (r(p)) _n
+
+
+file write tablecontent _n
+file close tablecontent
+
+/*****************************************************
+ Get interaction p-values for effect modifier with multiple levels
+ ******************************************************/
+
+cap file close tablecontent
+
+
+
+
+log close
